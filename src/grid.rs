@@ -119,6 +119,18 @@ impl WalkGrid {
     /// cells at the edge of the floor are dearer, so that routes keep to the middle. The search
     /// goes no further than routes costing `within`: cells much further away are left unreached.
     pub fn routes_from(&self, start: (usize, usize), within: f32) -> Routes {
+        self.routes_from_weighted(start, within, |_, _| 0.0)
+    }
+
+    /// As [`Self::routes_from`], but each step into a cell `(x, z)` costs `extra(x, z)` more -
+    /// danger, say: ground an enemy can see, which a route then goes round if it is not too far.
+    /// `extra` is never below 0.
+    pub fn routes_from_weighted(
+        &self,
+        start: (usize, usize),
+        within: f32,
+        extra: impl Fn(usize, usize) -> f32,
+    ) -> Routes {
         let mut routes = Routes {
             width: self.width,
             costs: vec![None; self.cells.len()],
@@ -162,7 +174,7 @@ impl WalkGrid {
                     1.0
                 };
                 let weight = if self.is_edge(nx, nz) { EDGE_COST } else { 1.0 };
-                let next = cost + step * weight;
+                let next = cost + step * (weight + extra(nx, nz).max(0.0));
                 let there = nz * self.width + nx;
                 if routes.costs[there].is_none_or(|best| next < best) {
                     routes.costs[there] = Some(next);
@@ -217,6 +229,26 @@ impl WalkGrid {
             .enumerate()
             .filter_map(|(i, d)| d.map(|d| ((i % self.width, i / self.width), d)))
             .max_by_key(|&(_, d)| d)
+    }
+
+    /// Whether there is floor all the way along the straight line from the middle of cell `a` to
+    /// the middle of cell `b` - nothing but floor between them, so that one can be seen from the
+    /// other, going by the ground alone.
+    pub fn sees_across(&self, a: (usize, usize), b: (usize, usize)) -> bool {
+        let (ax, az) = (a.0 as f32 + 0.5, a.1 as f32 + 0.5);
+        let (dx, dz) = (b.0 as f32 - a.0 as f32, b.1 as f32 - a.1 as f32);
+        // A few samples a cell, so that the line cannot slip past the corner of a wall.
+        let samples = ((dx.abs().max(dz.abs())) * 3.0).ceil().max(1.0) as usize;
+        (0..=samples).all(|i| {
+            let t = i as f32 / samples as f32;
+            let (x, z) = (ax + dx * t, az + dz * t);
+            let (x, z) = (x.floor(), z.floor());
+            x >= 0.0
+                && z >= 0.0
+                && (x as usize) < self.width
+                && (z as usize) < self.depth
+                && self.is_walkable(x as usize, z as usize)
+        })
     }
 
     /// The middle of cell `(x, z)` in the world, at height 0, with the grid's corner at `origin`.
@@ -278,6 +310,28 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_weighted_route_goes_round_the_dear_ground_if_it_can() {
+        // An open room, 11 by 11: straight across the middle is cheapest, until the middle
+        // column is made dear everywhere but at the top row.
+        let mut grid = WalkGrid::new(11, 11, 1.0);
+        for z in 0..11 {
+            for x in 0..11 {
+                grid.set(x, z, true);
+            }
+        }
+        let (from, to) = ((0, 5), (10, 5));
+        let plain = grid.routes_from(from, f32::INFINITY).path_to(to).unwrap();
+        assert!(plain.iter().all(|&(_, z)| (4..=6).contains(&z)), "straight across: {plain:?}");
+        let dear = |x: usize, z: usize| if x == 5 && z != 0 { 50.0 } else { 0.0 };
+        let round = grid.routes_from_weighted(from, f32::INFINITY, dear).path_to(to).unwrap();
+        let crossing = round.iter().find(|&&(x, _)| x == 5).unwrap();
+        assert_eq!(crossing.1, 0, "over the top: {round:?}");
+        // With nothing dear, the same as the plain routes.
+        let same = grid.routes_from_weighted(from, f32::INFINITY, |_, _| 0.0).path_to(to).unwrap();
+        assert_eq!(same, plain);
+    }
+
     use super::*;
 
     /// Builds a grid from rows of `#` (wall) and `.` (floor).

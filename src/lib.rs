@@ -8,6 +8,7 @@
 //! - [`hearing`]: how far a noise carries, along the corridors rather than through the walls.
 //! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next.
 //! - [`steer`]: making way for others in a corridor, walking or standing about.
+//! - [`search`]: where someone lost from sight could be by now, and who looks where for them.
 //!
 //! The crate never touches a scene. The game casts the rays that say whether anything is in the
 //! way, moves the nodes and plays the animations; this decides what an NPC makes of what is
@@ -19,6 +20,7 @@ pub mod alert;
 pub mod grid;
 pub mod hearing;
 pub mod route;
+pub mod search;
 pub mod sight;
 pub mod steer;
 
@@ -49,7 +51,8 @@ pub mod prelude {
         grid::{Routes, Rng, WalkGrid},
         heading_of,
         hearing::Heard,
-        route::{between, plan, route_to},
+        route::{between, plan, route_to, route_to_weighted},
+        search::SearchMap,
         sight::{Sight, Stance},
         steer::{make_way, step_aside},
     };
