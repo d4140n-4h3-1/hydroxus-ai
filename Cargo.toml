@@ -1,0 +1,15 @@
+[package]
+name = "hydroxus-ai"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Stealth AI for Hydroxus games: a walk grid and routes over it, sight only in front, hearing along the corridors, Metal Gear's alert phases, and making way in a crowd."
+repository = "https://github.com/d4140n-4h3-1/hydroxus-ai"
+keywords = ["game", "ai", "stealth", "hydroxus", "gamedev"]
+categories = ["game-development"]
+
+# Independent of the engine: only the vector maths, the same nalgebra the engine re-exports, so
+# its `Vector3<f32>` is the engine's. The game casts the rays, moves the nodes and plays the
+# animations; this decides what an NPC sees, hears and does about it.
+[dependencies]
+nalgebra = "0.35"
