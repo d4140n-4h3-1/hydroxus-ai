@@ -11,12 +11,13 @@ this decides what an NPC makes of what is round it.
 
 | Module    | What it does |
 |-----------|--------------|
-| `grid`    | A level's walkable ground as a grid of cells, with the floor's height in each; the cheapest ways across it, keeping to the middle of the corridors; and a small seeded random number generator. |
-| `route`   | Routes over the grid, as points on the floor: to somewhere, within a reach, or a trip away. |
+| `grid`    | A level's walkable ground as a grid of cells, with the floor's height in each; the cheapest ways across it, keeping to the middle of the corridors - or, weighted, out of harm's way; whether one cell can be seen from another along the ground; and a small seeded random number generator. |
+| `route`   | Routes over the grid, as points on the floor: to somewhere, within a reach, or a trip away; and routes that keep out of ground made dear, such as ground an enemy can see. |
 | `sight`   | What an NPC can see: only in a cone in front of it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark. |
 | `hearing` | How far a noise carries: along the corridors, not through the walls. |
 | `alert`   | Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next. |
 | `steer`   | Making way in a corridor: veering right round someone ahead, stopping only for someone right in front, stepping aside for someone coming. |
+| `search`  | Searching for someone lost from sight, together: where they could be by now, spreading along the ground as fast as they could go, cleared wherever a searcher looks; and where each searcher should look next, clear of where the others are going. In a simulated maze, three searchers find a player who has run off and hidden 98% of the time with it, against 83% wandering. |
 
 ```toml
 [dependencies]
