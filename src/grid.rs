@@ -16,6 +16,10 @@ use std::{
 /// out of its way for it.
 const EDGE_COST: f32 = 2.0;
 
+/// How much higher or lower one cell's floor can be than its neighbour's for a step between them:
+/// a stair's step, or two where a cell spans them, but not a ledge or the top of a crate.
+pub const MAX_CLIMB: f32 = 0.55;
+
 /// A grid of walkable cells over a level's footprint, each `cell_size` meters across, with how
 /// high the floor is in each.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,15 +105,21 @@ impl WalkGrid {
         self.floors[z * self.width + x]
     }
 
-    /// Whether `(x + dx, z + dz)` is on the grid and walkable.
+    /// Whether a step from cell `from` to its neighbour `to` can be taken: `to` is walkable, and
+    /// its floor no more than [`MAX_CLIMB`] above or below `from`'s - up a stair, not a ledge.
+    pub fn can_step(&self, from: (usize, usize), to: (usize, usize)) -> bool {
+        self.is_walkable(to.0, to.1) && (self.floor(to.0, to.1) - self.floor(from.0, from.1)).abs() <= MAX_CLIMB
+    }
+
+    /// Whether `(x + dx, z + dz)` is on the grid, walkable, and a step from `(x, z)`.
     fn walkable_at(&self, x: usize, z: usize, dx: isize, dz: isize) -> bool {
         match (x.checked_add_signed(dx), z.checked_add_signed(dz)) {
-            (Some(x), Some(z)) => x < self.width && z < self.depth && self.is_walkable(x, z),
+            (Some(nx), Some(nz)) => nx < self.width && nz < self.depth && self.can_step((x, z), (nx, nz)),
             _ => false,
         }
     }
 
-    /// Whether a cell is at the edge of the floor: next to a wall, even across a corner.
+    /// Whether a cell is at the edge of the floor: next to a wall or a drop, even across a corner.
     fn is_edge(&self, x: usize, z: usize) -> bool {
         (-1..=1).any(|dz| (-1..=1).any(|dx| !self.walkable_at(x, z, dx, dz)))
     }
@@ -209,7 +219,7 @@ impl WalkGrid {
                 (x, z + 1),
             ];
             for (nx, nz) in neighbours {
-                if nx >= self.width || nz >= self.depth || !self.is_walkable(nx, nz) {
+                if nx >= self.width || nz >= self.depth || !self.can_step((x, z), (nx, nz)) {
                     continue;
                 }
                 let slot = &mut distances[nz * self.width + nx];
@@ -386,6 +396,29 @@ mod tests {
         // Round the end of the wall, and along the middle row rather than hugging the wall.
         assert!(path.iter().any(|&(x, _)| x >= 5));
         assert!(path.contains(&(2, 1)) || path.contains(&(3, 1)));
+    }
+
+    #[test]
+    fn a_route_climbs_the_stairs_and_not_the_ledge() {
+        // A floor 1 m up along the top row, reached by the stairs at the right-hand end.
+        let mut maze = grid(&[
+            ".....", //
+            ".....", //
+        ]);
+        for x in 0..5 {
+            maze.set_floor(x, 0, 1.0);
+        }
+        for (z, height) in [(0, 1.0), (1, 0.5)] {
+            maze.set_floor(4, z, height);
+        }
+        assert!(!maze.can_step((0, 1), (0, 0)), "a 1 m ledge is no step");
+        assert!(maze.can_step((4, 1), (4, 0)), "half a meter is");
+        let path = maze.routes_from((0, 1), f32::INFINITY).path_to((0, 0)).unwrap();
+        assert!(path.contains(&(4, 1)), "round by the stairs: {path:?}");
+        for pair in path.windows(2) {
+            assert!(maze.can_step(pair[0], pair[1]), "{:?} to {:?}", pair[0], pair[1]);
+        }
+        assert_eq!(maze.distances_from((0, 1))[0], Some(9), "along, up and back");
     }
 
     #[test]

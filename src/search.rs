@@ -110,7 +110,7 @@ impl SearchMap {
                 .into_iter()
                 .filter_map(|(dx, dz)| {
                     let (nx, nz) = (x.checked_add_signed(dx)?, z.checked_add_signed(dz)?);
-                    (nx < self.width && nz < self.depth && grid.is_walkable(nx, nz))
+                    (nx < self.width && nz < self.depth && grid.can_step((x, z), (nx, nz)))
                         .then(|| self.index((nx, nz)))
                 })
                 .collect();

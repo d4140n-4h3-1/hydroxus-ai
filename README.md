@@ -11,7 +11,7 @@ this decides what an NPC makes of what is round it.
 
 | Module    | What it does |
 |-----------|--------------|
-| `grid`    | A level's walkable ground as a grid of cells, with the floor's height in each; the cheapest ways across it, keeping to the middle of the corridors - or, weighted, out of harm's way; whether one cell can be seen from another along the ground; and a small seeded random number generator. |
+| `grid`    | A level's walkable ground as a grid of cells, with the floor's height in each, stepping only between floors a stair apart, not up a ledge; the cheapest ways across it, keeping to the middle of the corridors - or, weighted, out of harm's way; whether one cell can be seen from another along the ground; and a small seeded random number generator. |
 | `route`   | Routes over the grid, as points on the floor: to somewhere, within a reach, or a trip away; and routes that keep out of ground made dear, such as ground an enemy can see. |
 | `sight`   | What an NPC can see: only in a cone in front of it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark. |
 | `hearing` | How far a noise carries: along the corridors, not through the walls. |
