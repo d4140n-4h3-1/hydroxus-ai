@@ -3,8 +3,9 @@
 //!
 //! - [`grid`]: the level's walkable ground as a grid of cells, and the cheapest ways across it.
 //! - [`route`]: routes over that ground, as points on the floor - to somewhere, or a trip away.
-//! - [`sight`]: what an NPC can see. It sees only in front of it, whatever it is doing - on Alert
-//!   too, and right next to it too - so it can be crept up on from behind, or slipped round.
+//! - [`sight`]: what an NPC can see. It sees clearly in front of it, and near out of the corner
+//!   of its eye, whatever it is doing - but nothing behind it, on Alert too, and right behind it
+//!   too - so it can be crept up on from behind, or slipped round.
 //! - [`hearing`]: how far a noise carries, along the corridors rather than through the walls.
 //! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next.
 //! - [`steer`]: making way for others in a corridor, walking or standing about.

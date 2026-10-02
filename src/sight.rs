@@ -1,9 +1,10 @@
 //! What an NPC can see.
 //!
-//! It sees only in a cone in front of it, whatever it is doing: calm, searching, or after the
-//! player. It has no sense of what is behind it, even right behind it, so it can be crept up on,
-//! or slipped round while it is looking the other way - and on Alert, a player who gets round
-//! behind it is lost to it, and it has to search.
+//! It sees clearly in a cone in front of it, whatever it is doing: calm, searching, or after the
+//! player. Out of the corner of its eye, further round to either side, it sees too, but only
+//! near: [`Sight::peripheral`] of as far. It has no sense of what is behind it, even right behind
+//! it, so it can be crept up on, or slipped round while it is looking the other way - and on
+//! Alert, a player who gets round behind it is lost to it, and it has to search.
 //!
 //! Hunting ([`Alert::Alert`]), it sees as far as it sees at all, however low the player is.
 //! Otherwise it sees less far the lower they are: a player crouched from half as far, one
@@ -29,8 +30,12 @@ pub enum Stance {
 pub struct Sight {
     /// How far off it sees, in meters, at most.
     pub range: f32,
-    /// How far to either side of straight ahead it sees, in radians.
+    /// How far to either side of straight ahead it sees clearly, in radians.
     pub cone: f32,
+    /// How far to either side of straight ahead it sees at all, out of the corner of its eye, in
+    /// radians; and how much of as far as it sees clearly, it sees that way.
+    pub side: f32,
+    pub peripheral: f32,
     /// How much of [`Sight::range`] it sees someone crouched and crawling from, when it is not
     /// after them.
     pub crouched: f32,
@@ -44,6 +49,8 @@ impl Default for Sight {
         Self {
             range: 30.0,
             cone: 55.0f32.to_radians(),
+            side: 100.0f32.to_radians(),
+            peripheral: 0.35,
             crouched: 0.5,
             crawling: 0.3,
             dark: 0.35,
@@ -76,12 +83,21 @@ impl Sight {
         in_the_dark: bool,
     ) -> bool {
         let to = them - feet;
-        if to.norm() > self.reach(alert, stance, in_the_dark) {
-            return false;
-        }
         let across = flat(to).norm();
         // Straight above or below its feet: not in front of it.
-        across > 1.0e-3 && flat(to).dot(&forward(heading)) >= across * self.cone.cos()
+        if across <= 1.0e-3 {
+            return false;
+        }
+        let ahead = flat(to).dot(&forward(heading));
+        let reach = self.reach(alert, stance, in_the_dark);
+        let reach = if ahead >= across * self.cone.cos() {
+            reach
+        } else if ahead >= across * self.side.cos() {
+            reach * self.peripheral
+        } else {
+            return false;
+        };
+        to.norm() <= reach
     }
 }
 
@@ -99,10 +115,26 @@ mod tests {
         for alert in [None, Some(Alert::Caution), Some(Alert::Evasion), Some(Alert::Alert)] {
             assert!(sees(alert, 0.0, 20.0, Stance::Standing, false), "ahead, {alert:?}");
             assert!(!sees(alert, 0.0, -10.0, Stance::Standing, false), "behind, {alert:?}");
-            assert!(!sees(alert, 10.0, 1.0, Stance::Standing, false), "off to the side, {alert:?}");
             assert!(!sees(alert, 0.0, -0.5, Stance::Standing, false), "right behind it, {alert:?}");
-            assert!(!sees(alert, 1.0, 0.0, Stance::Standing, false), "right beside it, {alert:?}");
+            assert!(!sees(alert, 1.0, -1.0, Stance::Standing, false), "behind its shoulder, {alert:?}");
         }
+    }
+
+    #[test]
+    fn out_of_the_corner_of_its_eye_it_sees_only_near() {
+        for alert in [None, Some(Alert::Caution), Some(Alert::Evasion), Some(Alert::Alert)] {
+            assert!(sees(alert, 1.0, 0.0, Stance::Standing, false), "right beside it, {alert:?}");
+            assert!(sees(alert, 6.0, 1.0, Stance::Standing, false), "off to the side, {alert:?}");
+            assert!(!sees(alert, 15.0, 1.0, Stance::Standing, false), "far off to the side, {alert:?}");
+            // Just past where it sees clearly, a little further round, it sees only near.
+            assert!(sees(alert, 15.0, 11.0, Stance::Standing, false), "in its cone, {alert:?}");
+            assert!(!sees(alert, 15.0, 9.0, Stance::Standing, false), "just out of it, {alert:?}");
+        }
+        // Lower, and in the dark, less far again.
+        assert!(sees(None, 4.0, 1.0, Stance::Crouching, false));
+        assert!(!sees(None, 6.0, 1.0, Stance::Crouching, false));
+        assert!(!sees(None, 4.0, 1.0, Stance::Standing, true));
+        assert!(sees(None, 3.0, 1.0, Stance::Standing, true));
     }
 
     #[test]
