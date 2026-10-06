@@ -12,7 +12,7 @@
 //! Compared with each searcher wandering off to somewhere at random, it finds a player who has
 //! run off and hidden far more often: see the test at the bottom.
 
-use crate::grid::WalkGrid;
+use crate::grid::{WalkGrid, LEVEL};
 
 /// How much of its chance a cell keeps each step it spreads, the rest going to its neighbours.
 const KEEP: f32 = 0.2;
@@ -25,12 +25,15 @@ const AHEAD_CELLS: f32 = 6.0;
 const AROUND: isize = 3;
 const HALVED_AFTER: f32 = 25.0;
 
-/// Where someone lost from sight could be: a chance for every cell of the ground.
+/// Where someone lost from sight could be: a chance for every cell of the ground, on every
+/// storey.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchMap {
     width: usize,
-    depth: usize,
     chance: Vec<f32>,
+    /// The cells with any chance, by index: all that spreading and looking have to go through,
+    /// however big the grid.
+    active: Vec<usize>,
     /// How far, in cells, they could have gone that has not been spread yet.
     owed: f32,
 }
@@ -40,42 +43,57 @@ impl SearchMap {
     pub fn new(grid: &WalkGrid) -> Self {
         Self {
             width: grid.width,
-            depth: grid.depth,
-            chance: vec![0.0; grid.width * grid.depth],
+            chance: vec![0.0; grid.width * grid.rows()],
+            active: Vec::new(),
             owed: 0.0,
         }
     }
 
-    /// They have just been lost at `at`, going `going` - a way across the grid, in cells, if it is
-    /// known: they are there, or a little way on that way.
-    pub fn lose(&mut self, grid: &WalkGrid, at: (usize, usize), going: Option<(f32, f32)>) {
-        self.chance.iter_mut().for_each(|c| *c = 0.0);
+    /// Nobody lost anywhere.
+    fn clear(&mut self) {
+        for &index in &self.active {
+            self.chance[index] = 0.0;
+        }
+        self.active.clear();
         self.owed = 0.0;
+    }
+
+    /// They have just been lost at `at`, going `going` - a way across the grid, in cells, if it is
+    /// known: they are there, or a little way on that way, on the same floor.
+    pub fn lose(&mut self, grid: &WalkGrid, at: (usize, usize), going: Option<(f32, f32)>) {
+        self.clear();
         if !grid.is_walkable(at.0, at.1) {
             return;
         }
+        let (px, pz) = grid.plan(at);
+        let height = grid.floor(at.0, at.1);
         let ahead = going
             .and_then(|(dx, dz)| {
                 let length = (dx * dx + dz * dz).sqrt();
                 (length > 1.0e-3).then(|| {
-                    let x = at.0 as f32 + dx / length * AHEAD_CELLS;
-                    let z = at.1 as f32 + dz / length * AHEAD_CELLS;
+                    let x = px as f32 + dx / length * AHEAD_CELLS;
+                    let z = pz as f32 + dz / length * AHEAD_CELLS;
                     (x.max(0.0) as usize, z.max(0.0) as usize)
                 })
             })
-            .filter(|&(x, z)| x < self.width && z < self.depth && grid.is_walkable(x, z))
+            .filter(|&(x, z)| x < grid.width && z < grid.depth)
+            .and_then(|plan| grid.cells_over(plan).find(|&(x, z)| (grid.floor(x, z) - height).abs() <= LEVEL))
             .filter(|&cell| grid.sees_across(at, cell));
         match ahead {
             Some(ahead) => {
-                let (ahead, at) = (self.index(ahead), self.index(at));
-                self.chance[ahead] = AHEAD;
-                self.chance[at] = 1.0 - AHEAD;
+                self.add(ahead, AHEAD);
+                self.add(at, 1.0 - AHEAD);
             }
-            None => {
-                let at = self.index(at);
-                self.chance[at] = 1.0;
-            }
+            None => self.add(at, 1.0),
         }
+    }
+
+    fn add(&mut self, cell: (usize, usize), chance: f32) {
+        let index = self.index(cell);
+        if self.chance[index] <= 0.0 {
+            self.active.push(index);
+        }
+        self.chance[index] += chance;
     }
 
     /// Whether there is still anywhere left they could be.
@@ -83,7 +101,7 @@ impl SearchMap {
         self.total() <= 1.0e-6
     }
 
-    /// The chance that they are in cell `(x, z)`.
+    /// The chance that they are in cell `(x, row)`.
     pub fn chance(&self, (x, z): (usize, usize)) -> f32 {
         self.chance[self.index((x, z))]
     }
@@ -98,39 +116,35 @@ impl SearchMap {
     }
 
     /// One cell further: each cell keeps some of its chance and gives the rest out evenly among
-    /// its walkable neighbours.
+    /// the cells a step from it, up and down stairs too.
     fn step(&mut self, grid: &WalkGrid) {
-        let mut next = vec![0.0; self.chance.len()];
-        for (index, &chance) in self.chance.iter().enumerate() {
+        let had: Vec<(usize, f32)> = self.active.iter().map(|&index| (index, self.chance[index])).collect();
+        for &(index, _) in &had {
+            self.chance[index] = 0.0;
+        }
+        self.active.clear();
+        for (index, chance) in had {
             if chance <= 0.0 {
                 continue;
             }
-            let (x, z) = (index % self.width, index / self.width);
-            let neighbours: Vec<usize> = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-                .into_iter()
-                .filter_map(|(dx, dz)| {
-                    let (nx, nz) = (x.checked_add_signed(dx)?, z.checked_add_signed(dz)?);
-                    (nx < self.width && nz < self.depth && grid.can_step((x, z), (nx, nz)))
-                        .then(|| self.index((nx, nz)))
-                })
-                .collect();
+            let cell = (index % self.width, index / self.width);
+            let neighbours: Vec<(usize, usize)> = grid.steps(cell).collect();
             if neighbours.is_empty() {
-                next[index] += chance;
+                self.add(cell, chance);
                 continue;
             }
-            next[index] += chance * KEEP;
+            self.add(cell, chance * KEEP);
             let share = chance * (1.0 - KEEP) / neighbours.len() as f32;
             for neighbour in neighbours {
-                next[neighbour] += share;
+                self.add(neighbour, share);
             }
         }
-        self.chance = next;
     }
 
     /// A searcher at cell `from`, facing `heading`, sees as far as `reach` cells, and as far as
-    /// `cone` either side of ahead - and all round, as near as `near` cells - and does not see
-    /// them: wherever it sees is cleared, and the rest of the chance made up to the whole again.
-    /// How much of it that cleared, before it was made up.
+    /// `cone` either side of ahead - and all round, as near as `near` cells - on its own floor,
+    /// and does not see them: wherever it sees is cleared, and the rest of the chance made up to
+    /// the whole again. How much of it that cleared, before it was made up.
     pub fn look(
         &mut self,
         grid: &WalkGrid,
@@ -143,37 +157,38 @@ impl SearchMap {
             return 0.0;
         }
         let (ahead_x, ahead_z) = (heading.sin(), heading.cos());
-        let r = reach.ceil() as isize;
+        let (fx0, fz0) = grid.plan(from);
+        let height = grid.floor(from.0, from.1);
         let mut cleared = 0.0;
-        for dz in -r..=r {
-            for dx in -r..=r {
-                let (Some(x), Some(z)) = (from.0.checked_add_signed(dx), from.1.checked_add_signed(dz)) else {
-                    continue;
-                };
-                if x >= self.width || z >= self.depth {
-                    continue;
-                }
-                let index = self.index((x, z));
-                if self.chance[index] <= 0.0 {
-                    continue;
-                }
-                let (fx, fz) = (dx as f32, dz as f32);
-                let distance = (fx * fx + fz * fz).sqrt();
-                if distance > reach {
-                    continue;
-                }
-                let in_cone = distance <= near
-                    || ((fx * ahead_x + fz * ahead_z) / distance.max(1.0e-3)).clamp(-1.0, 1.0).acos() <= cone;
-                if in_cone && grid.sees_across(from, (x, z)) {
-                    cleared += self.chance[index];
-                    self.chance[index] = 0.0;
-                }
+        let active = self.active.clone();
+        for index in active {
+            if self.chance[index] <= 0.0 {
+                continue;
+            }
+            let cell = (index % self.width, index / self.width);
+            if (grid.floor(cell.0, cell.1) - height).abs() > LEVEL {
+                continue;
+            }
+            let (x, z) = grid.plan(cell);
+            let (fx, fz) = (x as f32 - fx0 as f32, z as f32 - fz0 as f32);
+            let distance = (fx * fx + fz * fz).sqrt();
+            if distance > reach {
+                continue;
+            }
+            let in_cone = distance <= near
+                || ((fx * ahead_x + fz * ahead_z) / distance.max(1.0e-3)).clamp(-1.0, 1.0).acos() <= cone;
+            if in_cone && grid.sees_across(from, cell) {
+                cleared += self.chance[index];
+                self.chance[index] = 0.0;
             }
         }
+        self.active.retain(|&index| self.chance[index] > 0.0);
         let left = total - cleared;
         if left > 1.0e-6 {
             let scale = total / left;
-            self.chance.iter_mut().for_each(|c| *c *= scale);
+            for &index in &self.active {
+                self.chance[index] *= scale;
+            }
         }
         cleared / total
     }
@@ -191,18 +206,40 @@ impl SearchMap {
         within: f32,
     ) -> Option<(usize, usize)> {
         let routes = grid.routes_from(from, within);
+        // Only where there is any chance near is worth weighing.
+        let near: std::collections::HashSet<usize> = self
+            .active
+            .iter()
+            .filter(|&&index| self.chance[index] > 0.0)
+            .flat_map(|&index| {
+                let cell = (index % self.width, index / self.width);
+                let (x, z) = grid.plan(cell);
+                let storey = grid.storey(cell);
+                (-AROUND..=AROUND).flat_map(move |dz| {
+                    (-AROUND..=AROUND).filter_map(move |dx| {
+                        let (nx, nz) = (x.checked_add_signed(dx)?, z.checked_add_signed(dz)?);
+                        (nx < grid.width && nz < grid.depth).then(|| {
+                            let (cx, cz) = grid.on_storey((nx, nz), storey);
+                            cz * grid.width + cx
+                        })
+                    })
+                })
+            })
+            .collect();
         let mut best: Option<(f32, (usize, usize))> = None;
-        for (index, cost) in routes.costs.iter().enumerate() {
-            let Some(cost) = *cost else { continue };
+        for index in near {
+            let Some(cost) = routes.costs.get(index).copied().flatten() else { continue };
             let cell = (index % self.width, index / self.width);
-            let clear_of_others = taken.iter().all(|&(tx, tz)| {
-                let (dx, dz) = (tx as f32 - cell.0 as f32, tz as f32 - cell.1 as f32);
+            let (cx, cz) = grid.plan(cell);
+            let clear_of_others = taken.iter().all(|&taken| {
+                let (tx, tz) = grid.plan(taken);
+                let (dx, dz) = (tx as f32 - cx as f32, tz as f32 - cz as f32);
                 (dx * dx + dz * dz).sqrt() >= apart
             });
             if !clear_of_others {
                 continue;
             }
-            let around = self.around(cell);
+            let around = self.around(grid, cell);
             if around <= 1.0e-6 {
                 continue;
             }
@@ -214,14 +251,20 @@ impl SearchMap {
         best.map(|(_, cell)| cell)
     }
 
-    /// The chance within [`AROUND`] cells of `cell`.
-    fn around(&self, (x, z): (usize, usize)) -> f32 {
+    /// The chance within [`AROUND`] cells of `cell`, on its floor.
+    fn around(&self, grid: &WalkGrid, cell: (usize, usize)) -> f32 {
+        let (x, z) = grid.plan(cell);
+        let height = grid.floor(cell.0, cell.1);
         let mut sum = 0.0;
         for dz in -AROUND..=AROUND {
             for dx in -AROUND..=AROUND {
                 if let (Some(nx), Some(nz)) = (x.checked_add_signed(dx), z.checked_add_signed(dz)) {
-                    if nx < self.width && nz < self.depth {
-                        sum += self.chance[self.index((nx, nz))];
+                    if nx < grid.width && nz < grid.depth {
+                        for (cx, cz) in grid.cells_over((nx, nz)) {
+                            if (grid.floor(cx, cz) - height).abs() <= LEVEL {
+                                sum += self.chance[self.index((cx, cz))];
+                            }
+                        }
                     }
                 }
             }
@@ -230,7 +273,7 @@ impl SearchMap {
     }
 
     fn total(&self) -> f32 {
-        self.chance.iter().sum()
+        self.active.iter().map(|&index| self.chance[index]).sum()
     }
 
     fn index(&self, (x, z): (usize, usize)) -> usize {
@@ -246,6 +289,35 @@ mod tests {
         route::{between, plan, route_to},
     };
     use nalgebra::Vector3;
+
+    #[test]
+    fn the_chance_spreads_up_the_stairs_and_looking_clears_only_its_own_floor() {
+        // The ground along the first row; stairs along the second, up to 2 m at x = 3; and a
+        // floor 2 m up over the first row from there on.
+        let mut grid = WalkGrid::with_storeys(8, 2, 2, 1.0);
+        for x in 0..8 {
+            grid.set(x, 0, true);
+        }
+        for x in 0..4 {
+            grid.set(x, 1, true);
+            grid.set_floor(x, 1, 0.5 * (x as f32 + 1.0));
+        }
+        for x in 3..8 {
+            let (ux, uz) = grid.on_storey((x, 0), 1);
+            grid.set(ux, uz, true);
+            grid.set_floor(ux, uz, 2.0);
+        }
+        let mut map = SearchMap::new(&grid);
+        map.lose(&grid, (0, 0), None);
+        map.spread(&grid, 12.0);
+        let up = grid.on_storey((5, 0), 1);
+        assert!(map.chance(up) > 0.0, "up the stairs");
+        assert!(map.chance((5, 0)) > 0.0, "and along the ground under it");
+        // Looking along the ground clears the ground, not the floor up above it.
+        map.look(&grid, (0, 0), std::f32::consts::FRAC_PI_2, (10.0, 3.0, 10.0));
+        assert_eq!(map.chance((5, 0)), 0.0);
+        assert!(map.chance(up) > 0.0);
+    }
 
     /// A maze of `n` by `n` junctions, joined by corridors three cells wide with walls one cell
     /// thick, made by a random walk that backtracks.
