@@ -33,7 +33,9 @@ pub fn route_to(
 }
 
 /// As [`route_to`], but each step into a cell `(x, z)` of the grid costs `extra(x, z)` more (see
-/// [`WalkGrid::routes_from_weighted`]): a route that keeps out of harm's way where it can.
+/// [`WalkGrid::routes_from_weighted`]): a route that keeps out of harm's way where it can. Found
+/// by heading for `to` ([`WalkGrid::route_between_weighted`]), so it costs about as much as the
+/// route is long, however big the grid.
 pub fn route_to_weighted(
     (grid, origin): (&WalkGrid, Vector3<f32>),
     feet: Vector3<f32>,
@@ -44,7 +46,7 @@ pub fn route_to_weighted(
     let (Some(from), Some(goal)) = (grid.walkable_cell(origin, feet), grid.walkable_cell(origin, to)) else {
         return Vec::new();
     };
-    let Some(path) = grid.routes_from_weighted(from, reach, extra).path_to(goal) else {
+    let Some(path) = grid.route_between_weighted(from, goal, reach, extra) else {
         return Vec::new();
     };
     let mut route = along(grid, origin, path);

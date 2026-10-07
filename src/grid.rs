@@ -7,8 +7,10 @@
 
 use nalgebra::Vector3;
 use std::{
+    cell::RefCell,
     cmp::Ordering,
     collections::{BinaryHeap, VecDeque},
+    sync::OnceLock,
 };
 
 /// How much dearer a step is into a cell at the edge of the floor, next to a wall, than one out in
@@ -34,7 +36,7 @@ pub const STOREY_AWAY: f32 = 8.0;
 ///
 /// A cell is `(x, row)`: across, and down the rows of every storey in turn. On one storey, as
 /// most levels are, the rows are just the plan's.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct WalkGrid {
     /// How many cells across, and down, the plan is.
     pub width: usize,
@@ -45,6 +47,87 @@ pub struct WalkGrid {
     cells: Vec<bool>,
     /// How high the floor is in each cell, in meters.
     floors: Vec<f32>,
+    /// Where a step each of the [`WAYS`] from each cell lands (see [`Links`]): worked out once,
+    /// the first time a search needs it, and again only after the grid changes.
+    links: OnceLock<Vec<Links>>,
+}
+
+impl PartialEq for WalkGrid {
+    /// Grids are the same with the same cells, whether or not either has worked out its steps.
+    fn eq(&self, other: &Self) -> bool {
+        (self.width, self.depth, self.storeys, self.cell_size) == (other.width, other.depth, other.storeys, other.cell_size)
+            && self.cells == other.cells
+            && self.floors == other.floors
+    }
+}
+
+/// The ways a step across the plan can go: along the grid first, then across its corners.
+const WAYS: [(isize, isize); 8] = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
+
+/// Where a step each of the [`WAYS`] from a cell lands: 0 where it cannot be taken, otherwise one
+/// more than the storey it lands on. Read off a table, a search costs a lookup a step instead of
+/// looking through every storey of each neighbour, and its neighbours' neighbours for the edges.
+type Links = [u8; 8];
+
+/// What a search through a big grid needs for every cell, kept from one search to the next rather
+/// than made afresh: what reaching each costs, and from where. A cell's entries count only if it
+/// is stamped with the search's own number.
+#[derive(Default)]
+struct Scratch {
+    costs: Vec<f32>,
+    previous: Vec<u32>,
+    stamps: Vec<u32>,
+    search: u32,
+}
+
+impl Scratch {
+    /// Ready for a new search over `cells` cells, every entry unreached.
+    fn begin(&mut self, cells: usize) {
+        if self.stamps.len() < cells {
+            self.costs.resize(cells, 0.0);
+            self.previous.resize(cells, 0);
+            self.stamps.resize(cells, 0);
+        }
+        self.search = self.search.wrapping_add(1);
+        if self.search == 0 {
+            self.stamps.fill(0);
+            self.search = 1;
+        }
+    }
+
+    fn cost(&self, at: usize) -> Option<f32> {
+        (self.stamps[at] == self.search).then(|| self.costs[at])
+    }
+
+    fn reach(&mut self, at: usize, cost: f32, from: usize) {
+        self.stamps[at] = self.search;
+        self.costs[at] = cost;
+        self.previous[at] = from as u32;
+    }
+}
+
+thread_local! {
+    static SCRATCH: RefCell<Scratch> = RefCell::default();
+}
+
+/// A cell waiting to be searched from by [`WalkGrid::route_between_weighted`]: the most it could
+/// cost by way of it at least, what getting there cost, and which it is - the cheapest first, and
+/// of those the furthest along.
+#[derive(Debug, PartialEq)]
+struct Open(f32, f32, usize);
+
+impl Eq for Open {}
+
+impl Ord for Open {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.0.total_cmp(&self.0).then(self.1.total_cmp(&other.1))
+    }
+}
+
+impl PartialOrd for Open {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// The cheapest ways from one cell to every other, found by [`WalkGrid::routes_from`].
@@ -111,6 +194,7 @@ impl WalkGrid {
             cell_size,
             cells: vec![false; width * depth * storeys],
             floors: vec![0.0; width * depth * storeys],
+            links: OnceLock::new(),
         }
     }
 
@@ -143,6 +227,7 @@ impl WalkGrid {
 
     pub fn set(&mut self, x: usize, z: usize, walkable: bool) {
         self.cells[z * self.width + x] = walkable;
+        self.links.take();
     }
 
     pub fn is_walkable(&self, x: usize, z: usize) -> bool {
@@ -151,6 +236,7 @@ impl WalkGrid {
 
     pub fn set_floor(&mut self, x: usize, z: usize, height: f32) {
         self.floors[z * self.width + x] = height;
+        self.links.take();
     }
 
     /// How high the floor is in a cell, in meters.
@@ -181,14 +267,60 @@ impl WalkGrid {
 
     /// The cells a step along the plan's four ways from `from` lands in.
     pub fn steps(&self, from: (usize, usize)) -> impl Iterator<Item = (usize, usize)> + '_ {
-        [(-1, 0), (1, 0), (0, -1), (0, 1)]
-            .into_iter()
-            .filter_map(move |(dx, dz)| self.step_to(from, dx, dz))
+        let index = from.1 * self.width + from.0;
+        let links = self.links()[index];
+        (0..4).filter_map(move |way| self.landing(index, way, links[way]).map(|at| (at % self.width, at / self.width)))
     }
 
-    /// Whether a cell is at the edge of the floor: next to a wall or a drop, even across a corner.
-    fn is_edge(&self, cell: (usize, usize)) -> bool {
-        (-1..=1).any(|dz| (-1..=1).any(|dx| (dx, dz) != (0, 0) && self.step_to(cell, dx, dz).is_none()))
+    /// Where a step each way from every cell lands, worked out now if it has not been yet.
+    fn links(&self) -> &[Links] {
+        self.links.get_or_init(|| {
+            (0..self.cells.len())
+                .map(|index| {
+                    let mut links = [0; 8];
+                    if self.cells[index] {
+                        let cell = (index % self.width, index / self.width);
+                        for (way, &(dx, dz)) in WAYS.iter().enumerate() {
+                            if let Some(to) = self.step_to(cell, dx, dz) {
+                                links[way] = u8::try_from(self.storey(to) + 1).unwrap_or(0);
+                            }
+                        }
+                    }
+                    links
+                })
+                .collect()
+        })
+    }
+
+    /// The index of the cell a step `way` from cell `index` lands in, `link` being that way's
+    /// entry in its [`Links`].
+    fn landing(&self, index: usize, way: usize, link: u8) -> Option<usize> {
+        if link == 0 {
+            return None;
+        }
+        let (dx, dz) = WAYS[way];
+        let (x, z) = self.plan((index % self.width, index / self.width));
+        let (nx, nz) = (x.wrapping_add_signed(dx), z.wrapping_add_signed(dz));
+        Some((nz + (link as usize - 1) * self.depth) * self.width + nx)
+    }
+
+    /// Each step that can be taken from cell `index`: where it lands, how long it is - longer
+    /// across a corner, never cutting past a wall's - and how dear the cell it lands in is, the
+    /// edge of the floor being dearer.
+    fn each_step(&self, links: &[Links], index: usize, mut step: impl FnMut(usize, f32, f32)) {
+        let from = links[index];
+        for (way, &(dx, dz)) in WAYS.iter().enumerate() {
+            let Some(to) = self.landing(index, way, from[way]) else {
+                continue;
+            };
+            let diagonal = dx != 0 && dz != 0;
+            if diagonal && (from[if dx < 0 { 0 } else { 1 }] == 0 || from[if dz < 0 { 2 } else { 3 }] == 0) {
+                continue;
+            }
+            // Next to a wall or a drop, even across a corner: some way out of it cannot be taken.
+            let weight = if links[to].contains(&0) { EDGE_COST } else { 1.0 };
+            step(to, if diagonal { std::f32::consts::SQRT_2 } else { 1.0 }, weight);
+        }
     }
 
     /// The cheapest ways from `start` to every walkable cell it connects to, going across
@@ -217,6 +349,7 @@ impl WalkGrid {
         if !self.is_walkable(start.0, start.1) {
             return routes;
         }
+        let links = self.links();
         let first = start.1 * self.width + start.0;
         routes.costs[first] = Some(0.0);
         let mut frontier = BinaryHeap::from([Frontier(0.0, first)]);
@@ -227,27 +360,76 @@ impl WalkGrid {
             if cost > within {
                 break;
             }
-            let cell = (at % self.width, at / self.width);
-            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
-                let Some(next_cell) = self.step_to(cell, dx, dz) else {
-                    continue;
-                };
-                let diagonal = dx != 0 && dz != 0;
-                if diagonal && !(self.step_to(cell, dx, 0).is_some() && self.step_to(cell, 0, dz).is_some()) {
-                    continue;
-                }
-                let step = if diagonal { std::f32::consts::SQRT_2 } else { 1.0 };
-                let weight = if self.is_edge(next_cell) { EDGE_COST } else { 1.0 };
-                let next = cost + step * (weight + extra(next_cell.0, next_cell.1).max(0.0));
-                let there = next_cell.1 * self.width + next_cell.0;
+            self.each_step(links, at, |there, step, weight| {
+                let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
                 if routes.costs[there].is_none_or(|best| next < best) {
                     routes.costs[there] = Some(next);
                     routes.previous[there] = at;
                     frontier.push(Frontier(next, there));
                 }
-            }
+            });
         }
         routes
+    }
+
+    /// The cheapest way from `start` to `goal`, both included, as [`Self::routes_from_weighted`]
+    /// would find it - but heading for `goal` (A*), so that only the cells on the way to it are
+    /// searched, not everywhere else as near; and over cells kept from one search to the next,
+    /// not made afresh for each. None if it cannot be reached at a cost of `within` or less.
+    pub fn route_between_weighted(
+        &self,
+        start: (usize, usize),
+        goal: (usize, usize),
+        within: f32,
+        extra: impl Fn(usize, usize) -> f32,
+    ) -> Option<Vec<(usize, usize)>> {
+        if !self.is_walkable(start.0, start.1) || !self.is_walkable(goal.0, goal.1) {
+            return None;
+        }
+        let links = self.links();
+        let (first, last) = (start.1 * self.width + start.0, goal.1 * self.width + goal.0);
+        // The least it could cost from a cell to the goal: across the plan, every step at its
+        // cheapest, along the grid or across a corner. Never more than it does cost, so the way
+        // found is the cheapest.
+        let (gx, gz) = self.plan(goal);
+        let least = |at: usize| {
+            let (x, z) = self.plan((at % self.width, at / self.width));
+            let (dx, dz) = (x.abs_diff(gx) as f32, z.abs_diff(gz) as f32);
+            dx.max(dz) + (std::f32::consts::SQRT_2 - 1.0) * dx.min(dz)
+        };
+        SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            scratch.begin(self.cells.len());
+            scratch.reach(first, 0.0, first);
+            let mut open = BinaryHeap::from([Open(least(first), 0.0, first)]);
+            while let Some(Open(bound, cost, at)) = open.pop() {
+                if scratch.cost(at).is_some_and(|best| cost > best) {
+                    continue;
+                }
+                // Nothing left could get there within its means.
+                if bound > within {
+                    return None;
+                }
+                if at == last {
+                    let mut path = vec![goal];
+                    let mut at = last;
+                    while at != first {
+                        at = scratch.previous[at] as usize;
+                        path.push((at % self.width, at / self.width));
+                    }
+                    path.reverse();
+                    return Some(path);
+                }
+                self.each_step(links, at, |there, step, weight| {
+                    let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
+                    if scratch.cost(there).is_none_or(|best| next < best) {
+                        scratch.reach(there, next, at);
+                        open.push(Open(next + least(there), next, there));
+                    }
+                });
+            }
+            None
+        })
     }
 
     /// Every walkable cell, on every storey.
@@ -264,15 +446,19 @@ impl WalkGrid {
         if !self.is_walkable(start.0, start.1) {
             return distances;
         }
-        distances[start.1 * self.width + start.0] = Some(0);
-        let mut queue = VecDeque::from([start]);
-        while let Some(cell) = queue.pop_front() {
-            let next = distances[cell.1 * self.width + cell.0].unwrap() + 1;
-            for (nx, nz) in self.steps(cell) {
-                let slot = &mut distances[nz * self.width + nx];
-                if slot.is_none() {
-                    *slot = Some(next);
-                    queue.push_back((nx, nz));
+        let links = self.links();
+        let first = start.1 * self.width + start.0;
+        distances[first] = Some(0);
+        let mut queue = VecDeque::from([first]);
+        while let Some(at) = queue.pop_front() {
+            let next = distances[at].unwrap() + 1;
+            for (way, &link) in links[at][..4].iter().enumerate() {
+                let Some(there) = self.landing(at, way, link) else {
+                    continue;
+                };
+                if distances[there].is_none() {
+                    distances[there] = Some(next);
+                    queue.push_back(there);
                 }
             }
         }
@@ -650,6 +836,86 @@ mod tests {
         assert_eq!(grid.nearest_walkable(Vector3::zeros(), Vector3::new(190.0, 0.0, 190.0)), Some((390, 5)));
         grid.set(10, 10, true);
         assert_eq!(grid.nearest_walkable(Vector3::zeros(), Vector3::new(5.0, 0.0, 5.0)), Some((10, 10)));
+    }
+
+    /// What following `path` costs, step by step, as the searches reckon it.
+    fn cost_of(grid: &WalkGrid, path: &[(usize, usize)], extra: impl Fn(usize, usize) -> f32) -> f32 {
+        let links = grid.links();
+        path.windows(2)
+            .map(|pair| {
+                let ((ax, az), (bx, bz)) = (grid.plan(pair[0]), grid.plan(pair[1]));
+                let step = if ax != bx && az != bz { std::f32::consts::SQRT_2 } else { 1.0 };
+                let to = pair[1].1 * grid.width + pair[1].0;
+                let weight = if links[to].contains(&0) { EDGE_COST } else { 1.0 };
+                step * (weight + extra(pair[1].0, pair[1].1))
+            })
+            .sum()
+    }
+
+    #[test]
+    fn heading_for_the_goal_finds_as_cheap_a_route_as_searching_everywhere() {
+        // Random walls, some ground dear, and a second storey joined by a stair: A* must find
+        // routes costing what the search of every cell finds, and none where it finds none.
+        let mut rng = Rng::new(3);
+        let (width, depth) = (40, 30);
+        let mut grid = WalkGrid::with_storeys(width, depth, 2, 1.0);
+        for z in 0..depth {
+            for x in 0..width {
+                grid.set(x, z, rng.below(100) >= 28);
+            }
+        }
+        // Upstairs, a floor over the middle, 3 m up, reached by a stair climbing along x.
+        for z in 10..20 {
+            for x in 10..30 {
+                grid.set(x, z + depth, true);
+                grid.set_floor(x, z + depth, 3.0);
+            }
+        }
+        for (step, x) in (4..10).enumerate() {
+            let height = 0.5 * (step + 1) as f32;
+            grid.set(x, 15 + depth, true);
+            grid.set_floor(x, 15 + depth, height);
+            grid.set(x, 15, false);
+        }
+        // Open ground round the stair's foot.
+        for z in 12..19 {
+            for x in 0..4 {
+                grid.set(x, z, true);
+            }
+        }
+        let dear = |x: usize, z: usize| if (x + z).is_multiple_of(7) { 3.0 } else { 0.0 };
+        let cells: Vec<(usize, usize)> = grid.walkable_cells().collect();
+        let mut upstairs = 0;
+        for _ in 0..200 {
+            let (from, to) = (cells[rng.below(cells.len())], cells[rng.below(cells.len())]);
+            let everywhere = grid.routes_from_weighted(from, 60.0, dear);
+            let headed = grid.route_between_weighted(from, to, 60.0, dear);
+            let to_index = to.1 * width + to.0;
+            // The search of every cell also reaches a step past its means; A* keeps within them.
+            match (everywhere.costs[to_index].filter(|&cost| cost <= 60.0), headed) {
+                (Some(cost), Some(path)) => {
+                    assert_eq!((path[0], *path.last().unwrap()), (from, to));
+                    assert!(path.windows(2).all(|p| grid.plan(p[0]).0.abs_diff(grid.plan(p[1]).0) <= 1));
+                    let found = cost_of(&grid, &path, dear);
+                    assert!((found - cost).abs() < 1.0e-3, "{from:?} to {to:?}: {found} against {cost}");
+                    upstairs += usize::from(grid.storey(to) != grid.storey(from));
+                }
+                (None, None) => (),
+                (cost, path) => panic!("{from:?} to {to:?}: {cost:?} against {path:?}"),
+            }
+        }
+        assert!(upstairs > 0, "some routes went up or down the stair");
+    }
+
+    #[test]
+    fn the_steps_worked_out_once_follow_changes_to_the_grid() {
+        let mut maze = grid(&["...", "...", "..."]);
+        assert!(maze.route_between_weighted((0, 1), (2, 1), f32::INFINITY, |_, _| 0.0).is_some());
+        for z in 0..3 {
+            maze.set(1, z, false);
+        }
+        assert_eq!(maze.route_between_weighted((0, 1), (2, 1), f32::INFINITY, |_, _| 0.0), None);
+        assert_eq!(maze.steps((0, 1)).count(), 2);
     }
 
     #[test]
