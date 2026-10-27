@@ -10,6 +10,11 @@
 //! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next.
 //! - [`steer`]: making way for others in a corridor, walking or standing about.
 //! - [`search`]: where someone lost from sight could be by now, and who looks where for them.
+//! - [`trip`]: getting about over more than one floor, and across by ferry where that is quicker.
+//! - [`join`]: one of a kind that hunts joining in a chase it sees another of its kind in.
+//! - [`pace`]: sprinting now and then in a chase, and keeping breath for a last burst.
+//! - [`threat`]: a weapon pointed at an NPC: its warnings, then its doing something about it.
+//! - [`group`]: walking about together, a pair or a group about the one leading it.
 //!
 //! The crate never touches a scene. The game casts the rays that say whether anything is in the
 //! way, moves the nodes and plays the animations; this decides what an NPC makes of what is
@@ -19,11 +24,16 @@
 
 pub mod alert;
 pub mod grid;
+pub mod group;
 pub mod hearing;
+pub mod join;
+pub mod pace;
 pub mod route;
 pub mod search;
 pub mod sight;
 pub mod steer;
+pub mod threat;
+pub mod trip;
 
 pub use nalgebra;
 
@@ -39,6 +49,11 @@ pub fn forward(heading: f32) -> Vector3<f32> {
     Vector3::new(heading.sin(), 0.0, heading.cos())
 }
 
+/// Which way is to the right of one facing `heading`, along the ground: facing +z, -x.
+pub fn right_of(heading: f32) -> Vector3<f32> {
+    Vector3::new(-heading.cos(), 0.0, heading.sin())
+}
+
 /// The heading of `way`, along the ground; none if it goes nowhere along it.
 pub fn heading_of(way: Vector3<f32>) -> Option<f32> {
     (flat(way).norm() > 1.0e-3).then(|| way.x.atan2(way.z))
@@ -48,13 +63,14 @@ pub fn heading_of(way: Vector3<f32>) -> Option<f32> {
 pub mod prelude {
     pub use crate::{
         alert::{Alert, CAUTION, EVASION},
-        flat, forward,
+        flat, forward, right_of,
         grid::{Routes, Rng, WalkGrid},
         heading_of,
         hearing::Heard,
-        route::{between, plan, route_to, route_to_weighted},
+        route::{between, plan, plan_avoiding, route_to, route_to_weighted, spot_near},
         search::SearchMap,
         sight::{Sight, Stance},
         steer::{make_way, step_aside},
+        threat::Threat,
     };
 }

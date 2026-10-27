@@ -94,6 +94,85 @@ pub fn plan(
     along(grid, origin, path)
 }
 
+/// How much further than as the crow flies an NPC going about its business will walk to get
+/// somewhere, before giving it up for somewhere else (see [`plan_avoiding`]).
+pub const DETOUR: f32 = 2.5;
+
+/// As [`plan`], a trip from `feet` - but to somewhere not `kept_off`, a `trip` away as the crow
+/// flies, on any floor there, the way that costs least with `extra` added to stepping into each
+/// cell: off a city's roads, say, the way that crosses them least. The way there is found by
+/// heading for it, so it costs about as much as the route is long, however big the grid; a spot
+/// it cannot get to within [`DETOUR`] times as far, it tries no further for. Empty, with nowhere
+/// found to go.
+pub fn plan_avoiding(
+    (grid, origin): (&WalkGrid, Vector3<f32>),
+    feet: Vector3<f32>,
+    trip: (f32, f32),
+    kept_off: impl Fn(usize, usize) -> bool,
+    extra: impl Fn(usize, usize) -> f32,
+    rng: &mut Rng,
+) -> Vec<Vector3<f32>> {
+    let Some(from) = grid.cell_at(origin, feet).filter(|&(x, z)| grid.is_walkable(x, z)) else {
+        return Vec::new();
+    };
+    let goal = (0..24).find_map(|_| {
+        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+        let away = between(rng, trip) * grid.cell_size;
+        let spot = feet + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
+        let plan = grid.plan(grid.cell_at(origin, spot)?);
+        let floors: Vec<(usize, usize)> = grid.cells_over(plan).filter(|&(x, z)| !kept_off(x, z)).collect();
+        (!floors.is_empty()).then(|| (floors[rng.below(floors.len())], away / grid.cell_size))
+    });
+    let Some((goal, steps)) = goal else {
+        return Vec::new();
+    };
+    grid.route_between_weighted(from, goal, steps * DETOUR + 20.0, extra)
+        .map_or_else(Vec::new, |path| along(grid, origin, path))
+}
+
+/// Somewhere on the floor of `grid`, whose corner is at `origin`, within `reach` of `at` as the
+/// crow flies, picked by `rng` - or, with nowhere there, the floor nearest `at`.
+pub fn spot_near(
+    (grid, origin): (&WalkGrid, Vector3<f32>),
+    at: Vector3<f32>,
+    reach: f32,
+    rng: &mut Rng,
+) -> Option<Vector3<f32>> {
+    for _ in 0..24 {
+        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+        let away = between(rng, (0.0, reach));
+        let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
+        if let Some(cell) = grid.cell_at(origin, spot).filter(|&(x, z)| grid.is_walkable(x, z)) {
+            return Some(grid.on_floor(origin, cell));
+        }
+    }
+    grid.nearest_walkable(origin, at).map(|cell| grid.on_floor(origin, cell))
+}
+
+/// Somewhere on any floor of `grid` within `reach` of `at` as the crow flies - in a building, up
+/// on one of its floors as likely as on the ground - picked by `rng`; or, with nowhere there,
+/// the floor nearest `at`.
+pub fn spot_on_any_floor_near(
+    (grid, origin): (&WalkGrid, Vector3<f32>),
+    at: Vector3<f32>,
+    reach: f32,
+    rng: &mut Rng,
+) -> Option<Vector3<f32>> {
+    for _ in 0..24 {
+        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+        let away = between(rng, (0.0, reach));
+        let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
+        let Some(cell) = grid.cell_at(origin, spot) else {
+            continue;
+        };
+        let floors: Vec<(usize, usize)> = grid.cells_over(grid.plan(cell)).collect();
+        if !floors.is_empty() {
+            return Some(grid.on_floor(origin, floors[rng.below(floors.len())]));
+        }
+    }
+    grid.nearest_walkable(origin, at).map(|cell| grid.on_floor(origin, cell))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
