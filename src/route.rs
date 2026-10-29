@@ -73,10 +73,8 @@ pub fn plan(
     let routes = grid.routes_from(from, trip.1);
     let reached = |range: (f32, f32)| -> Vec<usize> {
         routes
-            .costs
-            .iter()
-            .enumerate()
-            .filter(|(_, cost)| cost.is_some_and(|c| c >= range.0 && c <= range.1))
+            .reached()
+            .filter(|&(_, c)| c >= range.0 && c <= range.1)
             .map(|(i, _)| i)
             .collect()
     };

@@ -26,7 +26,7 @@ impl Heard {
     /// Whether it is heard by someone at `feet`.
     pub fn by(&self, (grid, origin): (&WalkGrid, Vector3<f32>), feet: Vector3<f32>) -> bool {
         grid.cell_at(origin, feet)
-            .and_then(|(x, z)| self.routes.costs[z * grid.width + x])
+            .and_then(|(x, z)| self.routes.cost(z * grid.width + x))
             .is_some_and(|cost| cost <= self.within)
     }
 }

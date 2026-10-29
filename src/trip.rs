@@ -137,6 +137,12 @@ fn docks(grid: &WalkGrid, origin: Vector3<f32>, crossing: &Crossing) -> Option<[
 /// The way from `feet` to `to`: over the grid, as [`route_to`] has it, within `reach` - put on the
 /// floor at `to`'s height - or across on one of the `crossings`, when that is quicker: then the
 /// route to where it leaves from, and the trip.
+///
+/// Every way is looked for heading for where it goes, never by searching out from `feet` to every
+/// cell of the grid: in a city of millions of cells that would cost the tenth part of a second each
+/// time, and a crowd works out where it is going many times a second. A walk there about as short
+/// as the way as the crow flies is taken without weighing the ferries at all, as none of them
+/// could get there sooner by [`BETTER_BY`].
 pub fn go_to(
     (grid, origin): (&WalkGrid, Vector3<f32>),
     feet: Vector3<f32>,
@@ -149,22 +155,27 @@ pub fn go_to(
     if crossings.is_empty() {
         return (walk, None);
     }
-    let (Some(start), Some(goal)) = (grid.walkable_cell(origin, feet), cell_of(grid, origin, to)) else {
+    let walking = (!walk.is_empty()).then(|| length(feet, &walk) / PACE);
+    if walking.is_some_and(|walking| walking <= flat_distance(to - feet) / PACE + BETTER_BY) {
         return (walk, None);
+    }
+    // How long a walk from `a` to `b` takes, in seconds, if there is one within `reach`.
+    let leg = |a: Vector3<f32>, b: Vector3<f32>| {
+        let route = route_to((grid, origin), a, b, reach);
+        (!route.is_empty()).then(|| length(a, &route) / PACE)
     };
-    let (from_here, from_there) = (grid.distances_from(start), grid.distances_from(goal));
-    let seconds = |distances: &[Option<u32>], at: Vector3<f32>| {
-        let (x, z) = cell_of(grid, origin, at)?;
-        distances[z * grid.width + x].map(|cells| cells as f32 * grid.cell_size / PACE)
-    };
-    let walking = from_here[goal.1 * grid.width + goal.0].map(|cells| cells as f32 * grid.cell_size / PACE);
     let mut best: Option<(f32, Trip)> = None;
     for (ferry, crossing) in crossings.iter().enumerate() {
         let Some(docks) = docks(grid, origin, crossing) else {
             continue;
         };
         for from in 0..2 {
-            let (Some(there), Some(on)) = (seconds(&from_here, docks[from]), seconds(&from_there, docks[1 - from])) else {
+            // Not worth the walks to find out, if the crossing alone is no quicker.
+            let least = (flat_distance(docks[from] - feet) + flat_distance(to - docks[1 - from])) / PACE + 0.5 * crossing.longest;
+            if walking.is_some_and(|walking| least + BETTER_BY >= walking) || best.is_some_and(|(quickest, _)| least >= quickest) {
+                continue;
+            }
+            let (Some(there), Some(on)) = (leg(feet, docks[from]), leg(docks[1 - from], to)) else {
                 continue;
             };
             // Half the longest it could be, on average.
@@ -187,9 +198,15 @@ pub fn go_to(
     }
 }
 
-/// The walkable cell at `at`, at its height.
-fn cell_of(grid: &WalkGrid, origin: Vector3<f32>, at: Vector3<f32>) -> Option<(usize, usize)> {
-    grid.walkable_cell(origin, floor_near(grid, origin, at).unwrap_or(at))
+/// How far it is from `feet` along `route`, kept the way it is followed - its first point last.
+fn length(feet: Vector3<f32>, route: &[Vector3<f32>]) -> f32 {
+    let mut at = feet;
+    let mut walked = 0.0;
+    for &next in route.iter().rev() {
+        walked += flat_distance(next - at);
+        at = next;
+    }
+    walked
 }
 
 fn flat_distance(v: Vector3<f32>) -> f32 {
@@ -365,6 +382,35 @@ mod tests {
         // And not for anywhere it can walk to.
         let (_, trip) = go_to((&grid, Vector3::zeros()), Vector3::new(0.5, 0.0, 1.5), Vector3::new(1.5, 0.0, 0.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none());
+    }
+
+    #[test]
+    fn the_long_way_round_or_the_ferry_whichever_is_quicker() {
+        // Two banks of a long lake, joined round its far end; a ferry across its middle.
+        let mut grid = WalkGrid::new(60, 21, 1.0);
+        for z in 0..21 {
+            for x in 0..60 {
+                grid.set(x, z, z < 8 || z > 12 || x > 55);
+            }
+        }
+        let crossing = Crossing {
+            ends: [Vector3::new(10.5, 0.0, 8.5), Vector3::new(10.5, 0.0, 12.5)],
+            deck: Vector3::new(10.5, 0.0, 8.5),
+            velocity: Vector3::zeros(),
+            half: 0.9,
+            waiting: Some((0, 5.0)),
+            longest: 10.0,
+        };
+        let at = |x: f32, z: f32| Vector3::new(x, 0.0, z);
+        // Across from near the ferry: by ferry, rather than a hundred meters round the end.
+        let (route, trip) = go_to((&grid, Vector3::zeros()), at(10.5, 3.5), at(10.5, 17.5), f32::INFINITY, &[crossing]);
+        assert!(trip.is_some_and(|trip| trip.from == 0), "by ferry: {route:?}");
+        // Along its own bank: walking, the ferries not weighed.
+        let (route, trip) = go_to((&grid, Vector3::zeros()), at(10.5, 3.5), at(40.5, 3.5), f32::INFINITY, &[crossing]);
+        assert!(trip.is_none() && !route.is_empty());
+        // Across near the end, where the walk round is short: walking.
+        let (route, trip) = go_to((&grid, Vector3::zeros()), at(52.5, 3.5), at(52.5, 17.5), f32::INFINITY, &[crossing]);
+        assert!(trip.is_none() && !route.is_empty(), "round the end");
     }
 
     #[test]

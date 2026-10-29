@@ -228,7 +228,7 @@ impl SearchMap {
             .collect();
         let mut best: Option<(f32, (usize, usize))> = None;
         for index in near {
-            let Some(cost) = routes.costs.get(index).copied().flatten() else { continue };
+            let Some(cost) = routes.cost(index) else { continue };
             let cell = (index % self.width, index / self.width);
             let (cx, cz) = grid.plan(cell);
             let clear_of_others = taken.iter().all(|&taken| {

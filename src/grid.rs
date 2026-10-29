@@ -134,21 +134,54 @@ impl PartialOrd for Open {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Routes {
     width: usize,
-    /// What it costs to get to each cell, in cells walked with the edges dearer; none where it
-    /// cannot be reached.
-    pub costs: Vec<Option<f32>>,
-    /// The cell each is reached from, as an index.
-    previous: Vec<usize>,
+    reached: Reached,
+}
+
+/// What it costs to get to each cell reached, in cells walked with the edges dearer, and the cell
+/// it is reached from, as an index: for every cell of the grid, from a search with no bound to it;
+/// from one with a bound, for only those it reached, in the order of their indices - a few
+/// thousand of a grid that can have tens of millions, which would cost far more to make for each
+/// search than the search itself.
+#[derive(Debug, Clone, PartialEq)]
+enum Reached {
+    Every { costs: Vec<Option<f32>>, previous: Vec<usize> },
+    Some(Vec<(usize, f32, usize)>),
 }
 
 impl Routes {
+    /// What it costs to get to the cell `index`; none if it cannot be reached.
+    pub fn cost(&self, index: usize) -> Option<f32> {
+        self.entry(index).map(|(cost, _)| cost)
+    }
+
+    /// Each cell reached, by index, and what getting to it costs - in the order of their indices.
+    pub fn reached(&self) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
+        match &self.reached {
+            Reached::Every { costs, .. } => {
+                Box::new(costs.iter().enumerate().filter_map(|(i, cost)| cost.map(|cost| (i, cost))))
+            }
+            Reached::Some(cells) => Box::new(cells.iter().map(|&(i, cost, _)| (i, cost))),
+        }
+    }
+
+    fn entry(&self, index: usize) -> Option<(f32, usize)> {
+        match &self.reached {
+            Reached::Every { costs, previous } => Some((costs.get(index).copied().flatten()?, previous[index])),
+            Reached::Some(cells) => cells
+                .binary_search_by_key(&index, |&(i, _, _)| i)
+                .ok()
+                .map(|k| (cells[k].1, cells[k].2)),
+        }
+    }
+
     /// The cells from the start to `goal`, both included; none if it cannot be reached.
     pub fn path_to(&self, goal: (usize, usize)) -> Option<Vec<(usize, usize)>> {
         let mut at = goal.1 * self.width + goal.0;
-        self.costs.get(at)?.as_ref()?;
+        let (mut cost, _) = self.entry(at)?;
         let mut path = vec![goal];
-        while self.costs[at] != Some(0.0) {
-            at = self.previous[at];
+        while cost != 0.0 {
+            at = self.entry(at)?.1;
+            cost = self.entry(at)?.0;
             path.push((at % self.width, at / self.width));
         }
         path.reverse();
@@ -341,35 +374,72 @@ impl WalkGrid {
         within: f32,
         extra: impl Fn(usize, usize) -> f32,
     ) -> Routes {
-        let mut routes = Routes {
-            width: self.width,
-            costs: vec![None; self.cells.len()],
-            previous: vec![0; self.cells.len()],
-        };
-        if !self.is_walkable(start.0, start.1) {
-            return routes;
+        if within.is_finite() {
+            return self.routes_within(start, within, extra);
         }
-        let links = self.links();
-        let first = start.1 * self.width + start.0;
-        routes.costs[first] = Some(0.0);
-        let mut frontier = BinaryHeap::from([Frontier(0.0, first)]);
-        while let Some(Frontier(cost, at)) = frontier.pop() {
-            if routes.costs[at].is_some_and(|best| cost > best) {
-                continue;
-            }
-            if cost > within {
-                break;
-            }
-            self.each_step(links, at, |there, step, weight| {
-                let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
-                if routes.costs[there].is_none_or(|best| next < best) {
-                    routes.costs[there] = Some(next);
-                    routes.previous[there] = at;
-                    frontier.push(Frontier(next, there));
+        let (mut costs, mut previous) = (vec![None; self.cells.len()], vec![0; self.cells.len()]);
+        if self.is_walkable(start.0, start.1) {
+            let links = self.links();
+            let first = start.1 * self.width + start.0;
+            costs[first] = Some(0.0);
+            let mut frontier = BinaryHeap::from([Frontier(0.0, first)]);
+            while let Some(Frontier(cost, at)) = frontier.pop() {
+                if costs[at].is_some_and(|best| cost > best) {
+                    continue;
                 }
+                self.each_step(links, at, |there, step, weight| {
+                    let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
+                    if costs[there].is_none_or(|best| next < best) {
+                        costs[there] = Some(next);
+                        previous[there] = at;
+                        frontier.push(Frontier(next, there));
+                    }
+                });
+            }
+        }
+        Routes { width: self.width, reached: Reached::Every { costs, previous } }
+    }
+
+    /// As [`Self::routes_from_weighted`] with a bound: searched over cells kept from one search
+    /// to the next ([`SCRATCH`]), and keeping only those it reached.
+    fn routes_within(&self, start: (usize, usize), within: f32, extra: impl Fn(usize, usize) -> f32) -> Routes {
+        let mut cells = Vec::new();
+        if self.is_walkable(start.0, start.1) {
+            let links = self.links();
+            let first = start.1 * self.width + start.0;
+            SCRATCH.with(|scratch| {
+                let mut scratch = scratch.borrow_mut();
+                scratch.begin(self.cells.len());
+                scratch.reach(first, 0.0, first);
+                let mut touched = vec![first];
+                let mut frontier = BinaryHeap::from([Frontier(0.0, first)]);
+                while let Some(Frontier(cost, at)) = frontier.pop() {
+                    if scratch.cost(at).is_some_and(|best| cost > best) {
+                        continue;
+                    }
+                    if cost > within {
+                        break;
+                    }
+                    self.each_step(links, at, |there, step, weight| {
+                        let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
+                        let best = scratch.cost(there);
+                        if best.is_none_or(|best| next < best) {
+                            if best.is_none() {
+                                touched.push(there);
+                            }
+                            scratch.reach(there, next, at);
+                            frontier.push(Frontier(next, there));
+                        }
+                    });
+                }
+                touched.sort_unstable();
+                cells = touched
+                    .into_iter()
+                    .map(|i| (i, scratch.costs[i], scratch.previous[i] as usize))
+                    .collect();
             });
         }
-        routes
+        Routes { width: self.width, reached: Reached::Some(cells) }
     }
 
     /// The cheapest way from `start` to `goal`, both included, as [`Self::routes_from_weighted`]
@@ -613,6 +683,36 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn routes_within_a_bound_are_those_of_a_search_with_none_as_far_as_they_go() {
+        // A room with a wall across it but for a gap, and a corner kept dear: the bounded search,
+        // over the cells kept from one to the next, finds each cell it reaches at the cost, and by
+        // the way, that the search of every cell does - and twice running, the same.
+        let mut grid = WalkGrid::new(30, 20, 1.0);
+        for z in 0..20 {
+            for x in 0..30 {
+                grid.set(x, z, x != 15 || z == 3);
+            }
+        }
+        let dear = |x: usize, z: usize| if x > 20 && z > 10 { 5.0 } else { 0.0 };
+        let every = grid.routes_from_weighted((2, 10), f32::INFINITY, dear);
+        for _ in 0..2 {
+            let within = grid.routes_from_weighted((2, 10), 25.0, dear);
+            let reached: Vec<(usize, f32)> = within.reached().collect();
+            assert!(reached.windows(2).all(|pair| pair[0].0 < pair[1].0), "in the order of their indices");
+            assert!(reached.len() > 100 && reached.len() < 20 * 30, "{} reached", reached.len());
+            for &(index, cost) in &reached {
+                assert_eq!(every.cost(index), Some(cost), "cell {index}");
+            }
+            for (index, cost) in every.reached().filter(|&(_, cost)| cost <= 25.0) {
+                assert_eq!(within.cost(index), Some(cost), "cell {index} within the bound");
+                let cell = (index % 30, index / 30);
+                assert_eq!(within.path_to(cell), every.path_to(cell), "the way to {cell:?}");
+            }
+            assert_eq!(within.cost(19 * 30 + 29), None, "the far corner, out of reach");
+        }
+    }
+
     #[test]
     fn a_weighted_route_goes_round_the_dear_ground_if_it_can() {
         // An open room, 11 by 11: straight across the middle is cheapest, until the middle
@@ -892,7 +992,7 @@ mod tests {
             let headed = grid.route_between_weighted(from, to, 60.0, dear);
             let to_index = to.1 * width + to.0;
             // The search of every cell also reaches a step past its means; A* keeps within them.
-            match (everywhere.costs[to_index].filter(|&cost| cost <= 60.0), headed) {
+            match (everywhere.cost(to_index).filter(|&cost| cost <= 60.0), headed) {
                 (Some(cost), Some(path)) => {
                     assert_eq!((path[0], *path.last().unwrap()), (from, to));
                     assert!(path.windows(2).all(|p| grid.plan(p[0]).0.abs_diff(grid.plan(p[1]).0) <= 1));
