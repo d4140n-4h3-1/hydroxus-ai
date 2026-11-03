@@ -34,6 +34,11 @@ impl Groups {
         self.0.len() - 1
     }
 
+    /// No more than the first `len`, as the game's own list of them is cut back.
+    pub fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

@@ -54,6 +54,9 @@ It is in four folders, and its alert phases besides.
 | `group` | Walking about together: a pair one beside the other, a group fanned out behind the one leading it; who is in which, who speaks for it, who leads it on when the one leading it is gone, and waiting for one kept talking or fallen behind. |
 | `talk` | Who the player can talk to - close by and in front of them, nearest first; two going about by themselves that meet and stop to talk; a group talking among itself near the player; and how far off what they call out is heard. |
 | `report` | A witness going to tell the nearest sentry of what it saw, or hiding with none about till it gives up; and who hears an alarm. |
+| `opinion` | What an NPC thinks of the player, from -1 to 1: moved by deeds it sees - shooting, robbing, threatening, bribing, talking it round - easing back with time; friendly, neutral, wary or hostile; and how far that sways a talk check. |
+| `rumour` | What each NPC knows of the player (`Minds`): deeds seen at full strength, told on weaker each time and minded less, fading and forgotten; one turning up afresh has heard what the town talks of. |
+| `chat` | What NPCs talk about among themselves: news one has for another, told on as they talk; or, feeling strongly, what one thinks of the player, swaying the rest; or nothing much. |
 | `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight. |
 
 ### Besides
