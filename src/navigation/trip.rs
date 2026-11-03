@@ -1,19 +1,19 @@
 //! Getting about over more than one floor: NPCs' ways to where they are going, at the height
 //! it is at, and across by ferry where that is quicker than walking.
 //!
-//! A [`WalkGrid`] has one floor to a cell, and a point is on whichever floor its cell has - the
-//! catwalk over the sunken plaza, say, for someone down in the plaza under it. A point an NPC is
-//! going to is put on the floor nearest it at its own height instead (see [`floor_near`]).
+//! A point an NPC is going to is put on the floor nearest it at its own height (see
+//! [`floor_near`]): the sunken plaza for someone down in it, not the catwalk over it.
 //!
 //! Ferries - platforms that carry whoever stands on them between two places, waiting at each end
-//! a while - are no part of the grid (see [`Crossing`]): a ferry is a way of its own from
+//! a while - are no part of the navmesh (see [`Crossing`]): a ferry is a way of its own from
 //! one end to the other. Where walking there is the longer way round - or there is no way round -
 //! an NPC walks to the end the ferry leaves from and waits for it there, gets on while it waits,
 //! rides it across, gets off at the other end while it waits there, and walks on (see [`Trip`]).
 
-use crate::{
-    navigation::grid::{WalkGrid, MAX_CLIMB},
-    navigation::route::route_to,
+use crate::navigation::{
+    grid::MAX_CLIMB,
+    navmesh::NavMesh,
+    walk::{self, route_to},
 };
 use nalgebra::Vector3;
 
@@ -43,10 +43,7 @@ impl Crossing {
     }
 }
 
-/// How far from a point, at most, a floor at its height is looked for, in meters.
-pub const NEAR: f32 = 6.0;
-/// How far above or below a point a floor can be and still be at its height, in meters.
-const LEVEL: f32 = 1.0;
+pub use walk::NEAR;
 /// How fast an NPC gets about, for weighing a walk against a ferry, in meters per second.
 const PACE: f32 = 2.0;
 /// How much quicker the ferry has to be than walking for an NPC to take it, in seconds: waiting
@@ -62,43 +59,11 @@ const ABOARD: f32 = 0.9;
 const BOARDING_PACE: f32 = 1.0;
 const TIME_TO_SPARE: f32 = 1.0;
 
-/// The walkable floor nearest `point`, within [`NEAR`], at its height: in its own cell if that
-/// floor is near its height, or else another's. None with no floor at its height near it.
-pub fn floor_near(grid: &WalkGrid, origin: Vector3<f32>, point: Vector3<f32>) -> Option<Vector3<f32>> {
-    let at_height = |(x, z): (usize, usize)| grid.is_walkable(x, z) && (grid.floor(x, z) - point.y).abs() <= LEVEL;
-    if let Some(cell) = grid.cell_at(origin, point).filter(|&cell| at_height(cell)) {
-        return Some(Vector3::new(point.x, grid.floor(cell.0, cell.1), point.z));
-    }
-    // Over each spot of the plan near it, the floor at its height, on whichever storey.
-    let at_height_over = |plan: (usize, usize)| grid.cells_over(plan).find(|&cell| at_height(cell));
-    let reach = (NEAR / grid.cell_size).ceil() as isize;
-    let (cx, cz) = cell_near(grid, origin, point);
-    let mut best: Option<((usize, usize), f32)> = None;
-    for dz in -reach..=reach {
-        for dx in -reach..=reach {
-            let (Some(x), Some(z)) = (cx.checked_add_signed(dx), cz.checked_add_signed(dz)) else {
-                continue;
-            };
-            if x >= grid.width || z >= grid.depth {
-                continue;
-            }
-            let Some(cell) = at_height_over((x, z)) else {
-                continue;
-            };
-            let off = grid.center(origin, cell) - point;
-            let distance = (off.x * off.x + off.z * off.z).sqrt();
-            if distance <= NEAR && best.is_none_or(|(_, d)| distance < d) {
-                best = Some((cell, distance));
-            }
-        }
-    }
-    best.map(|(cell, _)| grid.on_floor(origin, cell))
-}
-
-/// The cell `point` is over, or the one at the grid's edge nearest it.
-fn cell_near(grid: &WalkGrid, origin: Vector3<f32>, point: Vector3<f32>) -> (usize, usize) {
-    let index = |at: f32, from: f32, count: usize| ((at - from) / grid.cell_size).floor().clamp(0.0, (count - 1) as f32) as usize;
-    (index(point.x, origin.x, grid.width), index(point.z, origin.z, grid.depth))
+/// The walkable floor nearest `point`, within [`NEAR`], at its height: where it is if there is
+/// floor there at its height, or else the nearest point that is. None with no floor at its height
+/// near it.
+pub fn floor_near(mesh: &NavMesh, point: Vector3<f32>) -> Option<Vector3<f32>> {
+    walk::floor_near(mesh, point)
 }
 
 /// Where along the way an NPC taking a ferry is.
@@ -130,28 +95,28 @@ pub struct Trip {
 }
 
 /// Where an NPC waits at each end of `crossing`: the floor beside where it waits, at its height.
-fn docks(grid: &WalkGrid, origin: Vector3<f32>, crossing: &Crossing) -> Option<[Vector3<f32>; 2]> {
-    Some([floor_near(grid, origin, crossing.ends[0])?, floor_near(grid, origin, crossing.ends[1])?])
+fn docks(mesh: &NavMesh, crossing: &Crossing) -> Option<[Vector3<f32>; 2]> {
+    Some([floor_near(mesh, crossing.ends[0])?, floor_near(mesh, crossing.ends[1])?])
 }
 
-/// The way from `feet` to `to`: over the grid, as [`route_to`] has it, within `reach` - put on the
+/// The way from `feet` to `to`: over the navmesh, as [`route_to`] has it, within `reach` meters - put on the
 /// floor at `to`'s height - or across on one of the `crossings`, when that is quicker: then the
 /// route to where it leaves from, and the trip.
 ///
 /// Every way is looked for heading for where it goes, never by searching out from `feet` to every
-/// cell of the grid: in a city of millions of cells that would cost the tenth part of a second each
-/// time, and a crowd works out where it is going many times a second. A walk there about as short
+/// polygon: in a city that would cost the tenth part of a second each time, and a crowd works out
+/// where it is going many times a second. A walk there about as short
 /// as the way as the crow flies is taken without weighing the ferries at all, as none of them
 /// could get there sooner by [`BETTER_BY`].
 pub fn go_to(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
+    mesh: &NavMesh,
     feet: Vector3<f32>,
     to: Vector3<f32>,
     reach: f32,
     crossings: &[Crossing],
 ) -> (Vec<Vector3<f32>>, Option<Trip>) {
-    let to = floor_near(grid, origin, to).map_or(to, |floor| Vector3::new(to.x, floor.y, to.z));
-    let walk = route_to((grid, origin), feet, to, reach);
+    let to = floor_near(mesh, to).map_or(to, |floor| Vector3::new(to.x, floor.y, to.z));
+    let walk = route_to(mesh, feet, to, reach);
     if crossings.is_empty() {
         return (walk, None);
     }
@@ -161,12 +126,12 @@ pub fn go_to(
     }
     // How long a walk from `a` to `b` takes, in seconds, if there is one within `reach`.
     let leg = |a: Vector3<f32>, b: Vector3<f32>| {
-        let route = route_to((grid, origin), a, b, reach);
+        let route = route_to(mesh, a, b, reach);
         (!route.is_empty()).then(|| length(a, &route) / PACE)
     };
     let mut best: Option<(f32, Trip)> = None;
     for (ferry, crossing) in crossings.iter().enumerate() {
-        let Some(docks) = docks(grid, origin, crossing) else {
+        let Some(docks) = docks(mesh, crossing) else {
             continue;
         };
         for from in 0..2 {
@@ -187,7 +152,7 @@ pub fn go_to(
     }
     match best {
         Some((time, trip)) if walking.is_none_or(|walking| time + BETTER_BY < walking) => {
-            let route = route_to((grid, origin), feet, trip.docks[trip.from], reach);
+            let route = route_to(mesh, feet, trip.docks[trip.from], reach);
             if route.is_empty() && flat_distance(feet - trip.docks[trip.from]) > AT_DOCK {
                 (walk, None)
             } else {
@@ -301,20 +266,25 @@ impl Trip {
     }
 }
 
-/// Whether a step from `from` to `to` keeps to floor that can be walked: onto a walkable cell, a
-/// stair's step up or down at most from the one it is leaving. Off the grid, any step back onto it.
-pub fn can_step(grid: &WalkGrid, origin: Vector3<f32>, from: Vector3<f32>, to: Vector3<f32>) -> bool {
-    let walkable = |at: Vector3<f32>| grid.cell_at(origin, at).filter(|&(x, z)| grid.is_walkable(x, z));
-    match (walkable(from), walkable(to)) {
+/// Whether a step from `from` to `to` keeps to floor that can be walked: onto floor at its height,
+/// a stair's step up or down at most from the floor it is leaving. Off the floor, any step back
+/// onto it.
+pub fn can_step(mesh: &NavMesh, from: Vector3<f32>, to: Vector3<f32>) -> bool {
+    match (mesh.poly_at(from), mesh.poly_at(to)) {
         (_, None) => false,
         (None, Some(_)) => true,
-        (Some(here), Some(there)) => here == there || (grid.floor(there.0, there.1) - grid.floor(here.0, here.1)).abs() <= MAX_CLIMB,
+        (Some(here), Some(there)) => here == there || (mesh.floor_of(there) - mesh.floor_of(here)).abs() <= MAX_CLIMB,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::navigation::grid::WalkGrid;
+
+    fn mesh(grid: &WalkGrid) -> NavMesh {
+        NavMesh::build(grid, Vector3::zeros(), |_, _| 0)
+    }
 
     /// Two floors: the ground everywhere, and a walkway 3 m up along the middle, over it.
     fn two_floors() -> WalkGrid {
@@ -332,24 +302,24 @@ mod tests {
     fn a_point_goes_on_the_floor_at_its_height() {
         let grid = two_floors();
         // Under the walkway, on the ground: the ground beside it, not the walkway over it.
-        let under = floor_near(&grid, Vector3::zeros(), Vector3::new(5.5, 0.0, 5.5)).unwrap();
+        let under = floor_near(&mesh(&grid), Vector3::new(5.5, 0.0, 5.5)).unwrap();
         assert_eq!(under.y, 0.0);
         assert!((under.x - 5.5).abs() <= 1.0 && under.x != 5.5, "{under:?}");
         // On the walkway, the walkway.
-        let on = floor_near(&grid, Vector3::zeros(), Vector3::new(5.5, 3.0, 5.5)).unwrap();
+        let on = floor_near(&mesh(&grid), Vector3::new(5.5, 3.0, 5.5)).unwrap();
         assert_eq!(on, Vector3::new(5.5, 3.0, 5.5));
         // Nothing at all at 10 m.
-        assert!(floor_near(&grid, Vector3::zeros(), Vector3::new(5.5, 10.0, 5.5)).is_none());
+        assert!(floor_near(&mesh(&grid), Vector3::new(5.5, 10.0, 5.5)).is_none());
     }
 
     #[test]
     fn a_step_keeps_to_the_floor_it_can_walk() {
         let grid = two_floors();
         let at = |x: f32| Vector3::new(x, 0.0, 5.5);
-        assert!(can_step(&grid, Vector3::zeros(), at(3.5), at(4.5)), "along the ground");
-        assert!(!can_step(&grid, Vector3::zeros(), at(4.5), at(5.5)), "not up onto the walkway");
-        assert!(!can_step(&grid, Vector3::zeros(), at(9.5), at(10.5)), "not off the edge");
-        assert!(can_step(&grid, Vector3::zeros(), at(-0.5), at(0.5)), "back onto it");
+        assert!(can_step(&mesh(&grid), at(3.5), at(4.5)), "along the ground");
+        assert!(!can_step(&mesh(&grid), at(4.5), at(5.5)), "not up onto the walkway");
+        assert!(!can_step(&mesh(&grid), at(9.5), at(10.5)), "not off the edge");
+        assert!(can_step(&mesh(&grid), at(-0.5), at(0.5)), "back onto it");
     }
 
     /// Two platforms, 3 m apart across the void, both on the ground, with a ferry between their
@@ -375,12 +345,12 @@ mod tests {
     #[test]
     fn with_no_way_round_it_takes_the_ferry() {
         let (grid, crossing) = islands();
-        let (route, trip) = go_to((&grid, Vector3::zeros()), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
         let trip = trip.expect("by ferry");
         assert_eq!((trip.from, trip.stage), (0, Stage::ToDock));
         assert!(route.first().is_some_and(|end| end.x < 2.0), "to the dock: {route:?}");
         // And not for anywhere it can walk to.
-        let (_, trip) = go_to((&grid, Vector3::zeros()), Vector3::new(0.5, 0.0, 1.5), Vector3::new(1.5, 0.0, 0.5), f32::INFINITY, &[crossing]);
+        let (_, trip) = go_to(&mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(1.5, 0.0, 0.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none());
     }
 
@@ -403,20 +373,20 @@ mod tests {
         };
         let at = |x: f32, z: f32| Vector3::new(x, 0.0, z);
         // Across from near the ferry: by ferry, rather than a hundred meters round the end.
-        let (route, trip) = go_to((&grid, Vector3::zeros()), at(10.5, 3.5), at(10.5, 17.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&mesh(&grid), at(10.5, 3.5), at(10.5, 17.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_some_and(|trip| trip.from == 0), "by ferry: {route:?}");
         // Along its own bank: walking, the ferries not weighed.
-        let (route, trip) = go_to((&grid, Vector3::zeros()), at(10.5, 3.5), at(40.5, 3.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&mesh(&grid), at(10.5, 3.5), at(40.5, 3.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none() && !route.is_empty());
         // Across near the end, where the walk round is short: walking.
-        let (route, trip) = go_to((&grid, Vector3::zeros()), at(52.5, 3.5), at(52.5, 17.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&mesh(&grid), at(52.5, 3.5), at(52.5, 17.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none() && !route.is_empty(), "round the end");
     }
 
     #[test]
     fn it_waits_gets_on_rides_and_gets_off() {
         let (grid, mut crossing) = islands();
-        let (_, trip) = go_to((&grid, Vector3::zeros()), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
+        let (_, trip) = go_to(&mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
         let mut trip = trip.unwrap();
         // At the dock, the ferry about to go: it waits.
         let dock = Vector3::new(1.5, 0.0, 1.5);

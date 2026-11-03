@@ -5,8 +5,9 @@
 
 use crate::{
     flat, forward,
-    navigation::grid::{Rng, WalkGrid},
-    navigation::route::spot_near,
+    navigation::grid::Rng,
+    navigation::navmesh::NavMesh,
+    navigation::walk::spot_near,
 };
 use nalgebra::Vector3;
 
@@ -14,11 +15,11 @@ pub const COVER_NEAR: f32 = 45.0;
 pub const COVER_RUN: f32 = 20.0;
 pub const COVER_TRIES: usize = 8;
 
-/// Where one at `feet`, facing `heading`, runs to from a shooting at `danger`, over `grid` whose
-/// corner is at `origin`: the first spot further from it that `open` says cannot be seen from it,
+/// Where one at `feet`, facing `heading`, runs to from a shooting at `danger`, over `mesh`: the
+/// first spot further from it that `open` says cannot be seen from it,
 /// or else the furthest of them; none if there is no floor to run to.
 pub fn take_cover(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
+    mesh: &NavMesh,
     feet: Vector3<f32>,
     heading: f32,
     danger: Vector3<f32>,
@@ -30,7 +31,7 @@ pub fn take_cover(
         .filter_map(|i| {
             let side = if i % 2 == 0 { 1.0 } else { -1.0 };
             let turn = side * (i as f32 / 2.0).ceil() * std::f32::consts::FRAC_PI_4 * 0.75;
-            spot_near((grid, origin), feet + forward(away + turn) * COVER_RUN, COVER_RUN * 0.3, rng)
+            spot_near(mesh, feet + forward(away + turn) * COVER_RUN, COVER_RUN * 0.3, rng)
         })
         .filter(|&spot| flat(spot - danger).norm() > flat(feet - danger).norm())
         .collect();
@@ -42,6 +43,7 @@ pub fn take_cover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::navigation::grid::WalkGrid;
 
     #[test]
     fn it_runs_away_from_the_shooting_somewhere_hidden_if_it_can() {
@@ -51,14 +53,14 @@ mod tests {
                 grid.set(x, z, true);
             }
         }
-        let origin = Vector3::zeros();
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
         let feet = Vector3::new(40.0, 0.0, 40.0);
         let danger = Vector3::new(40.0, 0.0, 30.0);
         let mut rng = Rng::new(1);
-        let to = take_cover((&grid, origin), feet, 0.0, danger, &mut rng, |_| true).unwrap();
+        let to = take_cover(&mesh, feet, 0.0, danger, &mut rng, |_| true).unwrap();
         assert!(flat(to - danger).norm() > flat(feet - danger).norm() + 10.0);
         // Hidden only off to the side: there, rather than straight on.
-        let to = take_cover((&grid, origin), feet, 0.0, danger, &mut rng, |at| at.x > 35.0 && at.x < 45.0).unwrap();
+        let to = take_cover(&mesh, feet, 0.0, danger, &mut rng, |at| at.x > 35.0 && at.x < 45.0).unwrap();
         assert!(to.x <= 35.0 || to.x >= 45.0);
     }
 }

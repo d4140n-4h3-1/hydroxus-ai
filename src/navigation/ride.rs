@@ -10,8 +10,10 @@
 use crate::{
     flat,
     navigation::{
-        grid::{Rng, WalkGrid},
-        route::{between, route_to},
+        grid::Rng,
+        navmesh::NavMesh,
+        route::between,
+        walk::route_to,
         trip,
     },
 };
@@ -180,13 +182,13 @@ impl Ride {
     }
 }
 
-/// A ride on one of `trains` for an NPC at `feet`, over `grid` whose corner is at `origin`: on the
+/// A ride on one of `trains` for an NPC at `feet`, over `mesh`: on the
 /// train with a station nearest it, near enough to think of, that has room - fewer than [`RIDERS`]
 /// and a doorway no one is taking it by, those `taken` as (train, doorway) - from that station to
 /// another of its stations: the way up to the platform beside the doorway - looked for no further
 /// than `reach` meters - and the ride.
 pub fn take_train<T: Train>(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
+    mesh: &NavMesh,
     feet: Vector3<f32>,
     trains: &[T],
     taken: &[(usize, usize)],
@@ -213,9 +215,9 @@ pub fn take_train<T: Train>(
     let free: Vec<usize> = (0..train.doorways().len()).filter(|&n| !taken.contains(&(which, n))).collect();
     let to = (from + 1 + rng.below(train.stations() - 1)) % train.stations();
     let doorway = free[rng.below(free.len())];
-    let wait = trip::floor_near(grid, origin, train.platform(from, doorway, PLATFORM_OUT))?;
-    let off = trip::floor_near(grid, origin, train.platform(to, doorway, PLATFORM_OUT))?;
-    let route = route_to((grid, origin), feet, wait, reach);
+    let wait = trip::floor_near(mesh, train.platform(from, doorway, PLATFORM_OUT))?;
+    let off = trip::floor_near(mesh, train.platform(to, doorway, PLATFORM_OUT))?;
+    let route = route_to(mesh, feet, wait, reach);
     if route.is_empty() {
         return None;
     }

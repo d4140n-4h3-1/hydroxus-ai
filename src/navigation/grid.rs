@@ -50,6 +50,9 @@ pub struct WalkGrid {
     /// Where a step each of the [`WAYS`] from each cell lands (see [`Links`]): worked out once,
     /// the first time a search needs it, and again only after the grid changes.
     links: OnceLock<Vec<Links>>,
+    /// The cells changed since they were last taken, once asked to keep them (see
+    /// [`WalkGrid::track_changes`]): for a navmesh made from it to catch up with.
+    changes: Option<Vec<(usize, usize)>>,
 }
 
 impl PartialEq for WalkGrid {
@@ -228,6 +231,7 @@ impl WalkGrid {
             cells: vec![false; width * depth * storeys],
             floors: vec![0.0; width * depth * storeys],
             links: OnceLock::new(),
+            changes: None,
         }
     }
 
@@ -261,6 +265,20 @@ impl WalkGrid {
     pub fn set(&mut self, x: usize, z: usize, walkable: bool) {
         self.cells[z * self.width + x] = walkable;
         self.relink((x, z));
+        if let Some(changes) = self.changes.as_mut() {
+            changes.push((x, z));
+        }
+    }
+
+    /// Keeps the cells changed from now on, for [`WalkGrid::take_changes`]: as a door opens, say,
+    /// for a navmesh made from it to catch up (see `NavMesh::sync`).
+    pub fn track_changes(&mut self) {
+        self.changes.get_or_insert_with(Vec::new);
+    }
+
+    /// The cells changed since the last time, as `(x, row)`, once tracked.
+    pub fn take_changes(&mut self) -> Vec<(usize, usize)> {
+        self.changes.as_mut().map(std::mem::take).unwrap_or_default()
     }
 
     pub fn is_walkable(&self, x: usize, z: usize) -> bool {
@@ -270,6 +288,9 @@ impl WalkGrid {
     pub fn set_floor(&mut self, x: usize, z: usize, height: f32) {
         self.floors[z * self.width + x] = height;
         self.relink((x, z));
+        if let Some(changes) = self.changes.as_mut() {
+            changes.push((x, z));
+        }
     }
 
     /// The links of the cells a change to cell `(x, row)` touches, worked out again if they have

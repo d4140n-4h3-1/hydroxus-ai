@@ -4,8 +4,9 @@
 //! for somewhere a good way off, straight away from it.
 
 use crate::{
-    navigation::grid::{Rng, WalkGrid},
-    navigation::route::spot_near,
+    navigation::grid::Rng,
+    navigation::navmesh::NavMesh,
+    navigation::walk::spot_near,
 };
 use nalgebra::Vector3;
 
@@ -34,16 +35,16 @@ pub fn cut_off(
 }
 
 /// Where one at `feet` running `away` - straight away from whoever is after it, along the
-/// ground - makes for, over `grid` whose corner is at `origin`: on the floor near
+/// ground - makes for, over `mesh`: on the floor near
 /// [`FLEE_AHEAD`] meters on, or that far on if there is none.
 pub fn flee_to(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
+    mesh: &NavMesh,
     feet: Vector3<f32>,
     away: Vector3<f32>,
     rng: &mut Rng,
 ) -> Vector3<f32> {
     let ahead = feet + away * FLEE_AHEAD;
-    spot_near((grid, origin), ahead, FLEE_AHEAD * 0.4, rng).unwrap_or(ahead)
+    spot_near(mesh, ahead, FLEE_AHEAD * 0.4, rng).unwrap_or(ahead)
 }
 
 #[cfg(test)]

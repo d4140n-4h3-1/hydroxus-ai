@@ -3,8 +3,8 @@
 //! It is built from a surveyed [`WalkGrid`] - which has already found where there is floor, how
 //! high it is, on how many storeys, and where a step up or down a stair can be taken - by merging
 //! its cells into as few rectangles as it can: each on one storey, its floor level to within
-//! [`FLAT`], and all of one area (a road, a doorway that can be shut - whatever the game tells
-//! apart). Where a step can be taken from one rectangle into another, a portal joins them: the
+//! [`FLAT`], all of one area (a road, a doorway that can be shut - whatever the game tells
+//! apart), and no more than [`MOST_CELLS`] along a side. Where a step can be taken from one rectangle into another, a portal joins them: the
 //! stretch of their shared edge it can be taken along.
 //!
 //! A city's grid is millions of cells; its navmesh, a few hundred thousand polygons at most, and a
@@ -23,6 +23,9 @@ use std::{
 /// How far a polygon's floor may be above or below its first cell's, in meters: a floor level
 /// enough to walk as one, so that each step of a stair is a polygon of its own.
 pub const FLAT: f32 = 0.05;
+/// How many cells along a side a polygon has at most: small enough that what is said of one -
+/// that it is a gang's turf, that the enemy can see it - is true of all of it, near enough.
+pub const MOST_CELLS: usize = 16;
 /// How many cells across each square of the index of where the polygons are is.
 const BUCKET: usize = 32;
 
@@ -76,6 +79,8 @@ pub struct NavMesh {
     buckets: Vec<Vec<Poly>>,
     /// Which polygons are shut, for the while: a door closed, a barrier up.
     blocked: Vec<bool>,
+    /// How many of `portals` no polygon has any more, since it was made afresh.
+    garbage: usize,
 }
 
 /// A side of a polygon: the cells along it inside, and the step out across it.
@@ -115,6 +120,65 @@ fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
+/// The walkable cells of `grid` within `[x0, z0, x1, z1)` of the plan, on every storey, merged
+/// into rectangles each on one storey, its floor level to within [`FLAT`], and all of one `area`
+/// - but those `kept(storey, x, z)` by others already.
+fn merge(grid: &WalkGrid, area: &dyn Fn(usize, usize) -> u8, [bx0, bz0, bx1, bz1]: [usize; 4], kept: &dyn Fn(usize, usize, usize) -> bool) -> Vec<Polygon> {
+    let (w, d) = (bx1 - bx0, bz1 - bz0);
+    let mut polygons = Vec::new();
+    let mut taken = vec![0u64; (w * d).div_ceil(64)];
+    let is_taken = |taken: &[u64], x: usize, z: usize| {
+        let i = (z - bz0) * w + (x - bx0);
+        taken[i / 64] & (1 << (i % 64)) != 0
+    };
+    for storey in 0..grid.storeys {
+        taken.iter_mut().for_each(|bits| *bits = 0);
+        for z in bz0..bz1 {
+            for x in bx0..bx1 {
+                let row = z + storey * grid.depth;
+                if !grid.is_walkable(x, row) || is_taken(&taken, x, z) || kept(storey, x, z) {
+                    continue;
+                }
+                let (floor, kind) = (grid.floor(x, row), area(x, row));
+                let fits = |taken: &[u64], cx: usize, cz: usize| {
+                    let row = cz + storey * grid.depth;
+                    grid.is_walkable(cx, row)
+                        && !is_taken(taken, cx, cz)
+                        && (grid.floor(cx, row) - floor).abs() <= FLAT
+                        && area(cx, row) == kind
+                        && !kept(storey, cx, cz)
+                };
+                let mut x1 = x + 1;
+                while x1 < bx1 && x1 - x < MOST_CELLS && fits(&taken, x1, z) {
+                    x1 += 1;
+                }
+                let mut z1 = z + 1;
+                while z1 < bz1 && z1 - z < MOST_CELLS && (x..x1).all(|cx| fits(&taken, cx, z1)) {
+                    z1 += 1;
+                }
+                for cz in z..z1 {
+                    for cx in x..x1 {
+                        let i = (cz - bz0) * w + (cx - bx0);
+                        taken[i / 64] |= 1 << (i % 64);
+                    }
+                }
+                polygons.push(Polygon {
+                    x0: x as u32,
+                    z0: z as u32,
+                    x1: x1 as u32,
+                    z1: z1 as u32,
+                    storey: storey as u16,
+                    area: kind,
+                    floor,
+                    first: 0,
+                    count: 0,
+                });
+            }
+        }
+    }
+    polygons
+}
+
 impl NavMesh {
     /// The navmesh of `grid`, whose corner is at `origin`: its walkable cells merged into
     /// rectangles of one storey, a level floor and one `area` - as `area` says of each cell, by
@@ -126,53 +190,7 @@ impl NavMesh {
     /// [`NavMesh::build`], not generic (see [`NavMesh::route_by`]).
     fn build_by(grid: &WalkGrid, origin: Vector3<f32>, area: &dyn Fn(usize, usize) -> u8) -> Self {
         let (width, depth) = (grid.width, grid.depth);
-        let mut polygons = Vec::new();
-        let mut taken = vec![0u64; (width * depth).div_ceil(64)];
-        for storey in 0..grid.storeys {
-            taken.iter_mut().for_each(|bits| *bits = 0);
-            let is_taken = |taken: &[u64], i: usize| taken[i / 64] & (1 << (i % 64)) != 0;
-            for z in 0..depth {
-                for x in 0..width {
-                    let row = z + storey * depth;
-                    if !grid.is_walkable(x, row) || is_taken(&taken, z * width + x) {
-                        continue;
-                    }
-                    let (floor, kind) = (grid.floor(x, row), area(x, row));
-                    let fits = |taken: &[u64], cx: usize, cz: usize| {
-                        let row = cz + storey * depth;
-                        grid.is_walkable(cx, row)
-                            && !is_taken(taken, cz * width + cx)
-                            && (grid.floor(cx, row) - floor).abs() <= FLAT
-                            && area(cx, row) == kind
-                    };
-                    let mut x1 = x + 1;
-                    while x1 < width && fits(&taken, x1, z) {
-                        x1 += 1;
-                    }
-                    let mut z1 = z + 1;
-                    while z1 < depth && (x..x1).all(|cx| fits(&taken, cx, z1)) {
-                        z1 += 1;
-                    }
-                    for cz in z..z1 {
-                        for cx in x..x1 {
-                            let i = cz * width + cx;
-                            taken[i / 64] |= 1 << (i % 64);
-                        }
-                    }
-                    polygons.push(Polygon {
-                        x0: x as u32,
-                        z0: z as u32,
-                        x1: x1 as u32,
-                        z1: z1 as u32,
-                        storey: storey as u16,
-                        area: kind,
-                        floor,
-                        first: 0,
-                        count: 0,
-                    });
-                }
-            }
-        }
+        let polygons = merge(grid, area, [0, 0, width, depth], &|_, _, _| false);
         let mut mesh = Self {
             origin,
             cell_size: grid.cell_size,
@@ -182,68 +200,184 @@ impl NavMesh {
             polygons,
             portals: Vec::new(),
             buckets: vec![Vec::new(); width.div_ceil(BUCKET) * depth.div_ceil(BUCKET)],
+            garbage: 0,
         };
-        for (n, p) in mesh.polygons.iter().enumerate() {
-            for bz in p.z0 as usize / BUCKET..=(p.z1 as usize - 1) / BUCKET {
-                for bx in p.x0 as usize / BUCKET..=(p.x1 as usize - 1) / BUCKET {
-                    mesh.buckets[bz * width.div_ceil(BUCKET) + bx].push(n as Poly);
-                }
-            }
+        for n in 0..mesh.polygons.len() {
+            mesh.index(n as Poly);
         }
-        mesh.join(grid);
+        for n in 0..mesh.polygons.len() as Poly {
+            mesh.relink(grid, n);
+        }
         mesh
     }
 
-    /// The portals between the polygons: along each edge of each, cell by cell, wherever the grid
-    /// steps across it into another polygon, a stretch for each polygon it steps into.
-    fn join(&mut self, grid: &WalkGrid) {
+    /// The squares of the index polygon `n` is over.
+    fn squares(&self, n: Poly) -> impl Iterator<Item = usize> + '_ {
+        let p = self.polygons[n as usize];
+        let cols = self.width.div_ceil(BUCKET);
+        let (xs, zs) = (p.x0 as usize / BUCKET..=(p.x1.max(p.x0 + 1) as usize - 1) / BUCKET, p.z0 as usize / BUCKET..=(p.z1.max(p.z0 + 1) as usize - 1) / BUCKET);
+        zs.flat_map(move |bz| xs.clone().map(move |bx| bz * cols + bx))
+    }
+
+    /// Puts polygon `n` in the index, under each square it is over.
+    fn index(&mut self, n: Poly) {
+        let squares: Vec<usize> = self.squares(n).collect();
+        for square in squares {
+            self.buckets[square].push(n);
+        }
+    }
+
+    /// Takes polygon `n` out of the index.
+    fn unindex(&mut self, n: Poly) {
+        let squares: Vec<usize> = self.squares(n).collect();
+        for square in squares {
+            self.buckets[square].retain(|&m| m != n);
+        }
+    }
+
+    /// Works polygon `n`'s portals out afresh, from `grid`: along each edge of it, cell by cell,
+    /// wherever the grid steps across into another polygon, a stretch for each polygon it steps
+    /// into. Its old ones, if any, are left as garbage, cleared out once there is enough of it.
+    fn relink(&mut self, grid: &WalkGrid, n: Poly) {
+        let portals = self.portals_of(grid, n);
+        let p = &mut self.polygons[n as usize];
+        self.garbage += p.count as usize;
+        p.first = self.portals.len() as u32;
+        p.count = portals.len() as u16;
+        self.portals.extend(portals);
+    }
+
+    fn portals_of(&self, grid: &WalkGrid, n: Poly) -> Vec<Portal> {
         let cs = self.cell_size;
         let (ox, oz) = (self.origin.x, self.origin.z);
         let mut portals = Vec::new();
-        for n in 0..self.polygons.len() {
-            let p = self.polygons[n];
-            let first = portals.len() as u32;
-            let row_of = |z: u32| z as usize + p.storey as usize * self.depth;
-            // Each side: the cells along it inside, the step out across it, and where along the
-            // edge each cell's stretch runs, in the world.
-            let sides: [Side; 4] = [
-                ((p.z0..p.z1).map(|z| (p.x1 - 1, z)).collect(), (1, 0)),
-                ((p.z0..p.z1).map(|z| (p.x0, z)).collect(), (-1, 0)),
-                ((p.x0..p.x1).map(|x| (x, p.z1 - 1)).collect(), (0, 1)),
-                ((p.x0..p.x1).map(|x| (x, p.z0)).collect(), (0, -1)),
-            ];
-            for (cells, (dx, dz)) in sides {
-                let mut run: Option<(Poly, [f32; 2], [f32; 2])> = None;
-                for (x, z) in cells {
-                    let to = grid
-                        .step_to((x as usize, row_of(z)), dx, dz)
-                        .and_then(|(tx, trow)| self.over(grid.plan((tx, trow)), grid.storey((tx, trow))));
-                    // This cell's stretch of the edge.
-                    let (a, b) = match (dx, dz) {
-                        (1, _) => ([ox + (x + 1) as f32 * cs, oz + z as f32 * cs], [ox + (x + 1) as f32 * cs, oz + (z + 1) as f32 * cs]),
-                        (-1, _) => ([ox + x as f32 * cs, oz + z as f32 * cs], [ox + x as f32 * cs, oz + (z + 1) as f32 * cs]),
-                        (_, 1) => ([ox + x as f32 * cs, oz + (z + 1) as f32 * cs], [ox + (x + 1) as f32 * cs, oz + (z + 1) as f32 * cs]),
-                        _ => ([ox + x as f32 * cs, oz + z as f32 * cs], [ox + (x + 1) as f32 * cs, oz + z as f32 * cs]),
-                    };
-                    run = match (run, to) {
-                        (Some((q, start, _)), Some(t)) if q == t => Some((q, start, b)),
-                        (previous, to) => {
-                            if let Some((q, start, end)) = previous {
-                                portals.push(Portal { to: q, a: start, b: end });
-                            }
-                            to.filter(|&t| t != n as Poly).map(|t| (t, a, b))
+        let p = self.polygons[n as usize];
+        if p.x0 == p.x1 {
+            return portals;
+        }
+        let row_of = |z: u32| z as usize + p.storey as usize * self.depth;
+        // Each side: the cells along it inside, and the step out across it.
+        let sides: [Side; 4] = [
+            ((p.z0..p.z1).map(|z| (p.x1 - 1, z)).collect(), (1, 0)),
+            ((p.z0..p.z1).map(|z| (p.x0, z)).collect(), (-1, 0)),
+            ((p.x0..p.x1).map(|x| (x, p.z1 - 1)).collect(), (0, 1)),
+            ((p.x0..p.x1).map(|x| (x, p.z0)).collect(), (0, -1)),
+        ];
+        for (cells, (dx, dz)) in sides {
+            let mut run: Option<(Poly, [f32; 2], [f32; 2])> = None;
+            for (x, z) in cells {
+                let to = grid
+                    .step_to((x as usize, row_of(z)), dx, dz)
+                    .and_then(|(tx, trow)| self.over(grid.plan((tx, trow)), grid.storey((tx, trow))));
+                // This cell's stretch of the edge.
+                let (a, b) = match (dx, dz) {
+                    (1, _) => ([ox + (x + 1) as f32 * cs, oz + z as f32 * cs], [ox + (x + 1) as f32 * cs, oz + (z + 1) as f32 * cs]),
+                    (-1, _) => ([ox + x as f32 * cs, oz + z as f32 * cs], [ox + x as f32 * cs, oz + (z + 1) as f32 * cs]),
+                    (_, 1) => ([ox + x as f32 * cs, oz + (z + 1) as f32 * cs], [ox + (x + 1) as f32 * cs, oz + (z + 1) as f32 * cs]),
+                    _ => ([ox + x as f32 * cs, oz + z as f32 * cs], [ox + (x + 1) as f32 * cs, oz + z as f32 * cs]),
+                };
+                run = match (run, to) {
+                    (Some((q, start, _)), Some(t)) if q == t => Some((q, start, b)),
+                    (previous, to) => {
+                        if let Some((q, start, end)) = previous {
+                            portals.push(Portal { to: q, a: start, b: end });
                         }
-                    };
-                }
-                if let Some((q, start, end)) = run {
-                    portals.push(Portal { to: q, a: start, b: end });
-                }
+                        to.filter(|&t| t != n).map(|t| (t, a, b))
+                    }
+                };
             }
-            let p = &mut self.polygons[n];
+            if let Some((q, start, end)) = run {
+                portals.push(Portal { to: q, a: start, b: end });
+            }
+        }
+        portals
+    }
+
+    /// Catches up with the cells of `grid` changed since it was built, or last caught up - as a
+    /// door opens or shuts, say (see [`WalkGrid::track_changes`]): the polygons over or next to
+    /// them made afresh, of cells of the `area`s `area` says, as [`NavMesh::build`] made them, and
+    /// joined to those round them; the rest left as they are. Whether anything changed. Polygons
+    /// made afresh are new numbers; those they replace are left empty.
+    pub fn sync(&mut self, grid: &mut WalkGrid, area: impl Fn(usize, usize) -> u8) -> bool {
+        let changes = grid.take_changes();
+        if changes.is_empty() {
+            return false;
+        }
+        self.sync_by(grid, &changes, &area);
+        true
+    }
+
+    fn sync_by(&mut self, grid: &WalkGrid, changes: &[(usize, usize)], area: &dyn Fn(usize, usize) -> u8) {
+        // The changed cells on the plan, and a cell round, on every storey.
+        let plan: Vec<(usize, usize)> = changes.iter().map(|&cell| grid.plan(cell)).collect();
+        let mut bounds = [
+            plan.iter().map(|c| c.0).min().unwrap_or(0).saturating_sub(1),
+            plan.iter().map(|c| c.1).min().unwrap_or(0).saturating_sub(1),
+            (plan.iter().map(|c| c.0).max().unwrap_or(0) + 2).min(self.width),
+            (plan.iter().map(|c| c.1).max().unwrap_or(0) + 2).min(self.depth),
+        ];
+        // The polygons over any of it are made afresh, all of each.
+        let overlaps = |p: &Polygon, b: &[usize; 4]| {
+            p.x0 != p.x1 && (p.x0 as usize) < b[2] && (p.x1 as usize) > b[0] && (p.z0 as usize) < b[3] && (p.z1 as usize) > b[1]
+        };
+        let near = bounds;
+        let gone: Vec<Poly> = (0..self.polygons.len() as Poly).filter(|&n| overlaps(&self.polygons[n as usize], &near)).collect();
+        for &n in &gone {
+            let p = self.polygons[n as usize];
+            bounds = [bounds[0].min(p.x0 as usize), bounds[1].min(p.z0 as usize), bounds[2].max(p.x1 as usize), bounds[3].max(p.z1 as usize)];
+        }
+        // Those that stay, over the ground made afresh, keep theirs.
+        let staying: Vec<Polygon> = (0..self.polygons.len())
+            .filter(|n| !gone.contains(&(*n as Poly)))
+            .map(|n| self.polygons[n])
+            .filter(|p| overlaps(p, &bounds))
+            .collect();
+        let kept = |storey: usize, x: usize, z: usize| {
+            staying.iter().any(|p| {
+                p.storey as usize == storey && (p.x0..p.x1).contains(&(x as u32)) && (p.z0..p.z1).contains(&(z as u32))
+            })
+        };
+        // Their neighbours, whose portals lead into them.
+        let mut neighbours: Vec<Poly> = gone.iter().flat_map(|&n| self.portals(n).iter().map(|p| p.to)).filter(|m| !gone.contains(m)).collect();
+        for &n in &gone {
+            self.unindex(n);
+            let p = &mut self.polygons[n as usize];
+            self.garbage += p.count as usize;
+            *p = Polygon { x1: p.x0, z1: p.z0, count: 0, ..*p };
+        }
+        let made = merge(grid, area, bounds, &kept);
+        let first = self.polygons.len() as Poly;
+        for polygon in made {
+            self.polygons.push(polygon);
+            self.blocked.push(false);
+            self.index(self.polygons.len() as Poly - 1);
+        }
+        let fresh: Vec<Poly> = (first..self.polygons.len() as Poly).collect();
+        for &n in &fresh {
+            self.relink(grid, n);
+        }
+        // And any that now border the new ones.
+        neighbours.extend(fresh.iter().flat_map(|&n| self.portals(n).iter().map(|p| p.to)).filter(|&m| m < first));
+        neighbours.sort_unstable();
+        neighbours.dedup();
+        for n in neighbours {
+            self.relink(grid, n);
+        }
+        if self.garbage > self.portals.len() / 2 {
+            self.sweep();
+        }
+    }
+
+    /// Clears the portals no polygon has any more out of the way.
+    fn sweep(&mut self) {
+        let mut portals = Vec::with_capacity(self.portals.len() - self.garbage);
+        for p in &mut self.polygons {
+            let first = portals.len() as u32;
+            portals.extend_from_slice(&self.portals[p.first as usize..p.first as usize + p.count as usize]);
             p.first = first;
-            p.count = (portals.len() as u32 - first) as u16;
         }
         self.portals = portals;
+        self.garbage = 0;
     }
 
     /// The polygon over cell `(x, z)` of the plan on `storey`.
@@ -469,7 +603,10 @@ impl NavMesh {
             return Vec::new();
         };
         // The portals, each end left or right as seen going through it, drawn in from each end.
+        // Each also with where its ends were before they were drawn in: a wall's corner, if a turn
+        // is made round one.
         let mut gates: Vec<([f32; 2], [f32; 2], Poly)> = vec![(start, start, from)];
+        let mut walls: Vec<([f32; 2], [f32; 2])> = vec![(start, start)];
         let mut came = start;
         for &(poly, k) in &corridor {
             let portal = self.portals(poly)[k];
@@ -478,13 +615,16 @@ impl NavMesh {
             let a = [portal.a[0] + (portal.b[0] - portal.a[0]) * inset, portal.a[1] + (portal.b[1] - portal.a[1]) * inset];
             let b = [portal.b[0] + (portal.a[0] - portal.b[0]) * inset, portal.b[1] + (portal.a[1] - portal.b[1]) * inset];
             let middle = portal.middle();
-            let (left, right) = if side(came, middle, a) > 0.0 { (b, a) } else { (a, b) };
+            let ((left, right), wall) =
+                if side(came, middle, a) > 0.0 { ((b, a), (portal.b, portal.a)) } else { ((a, b), (portal.a, portal.b)) };
             gates.push((left, right, portal.to));
+            walls.push(wall);
             came = middle;
         }
         gates.push((end, end, goal));
-        // Pulled taut: the funnel.
-        let mut points: Vec<([f32; 2], Poly)> = Vec::new();
+        walls.push((end, end));
+        // Pulled taut: the funnel. Each corner with the wall's corner it turns round.
+        let mut points: Vec<([f32; 2], Poly, [f32; 2])> = Vec::new();
         let (mut apex, mut left, mut right) = (start, start, start);
         let (mut left_at, mut right_at) = (0, 0);
         let mut i = 1;
@@ -494,7 +634,7 @@ impl NavMesh {
                 if apex == right || side(apex, left, r) > 0.0 {
                     (right, right_at) = (r, i);
                 } else {
-                    points.push((left, gates[left_at].2));
+                    points.push((left, gates[left_at].2, walls[left_at].0));
                     let at = left_at;
                     apex = left;
                     (left, right, left_at, right_at) = (apex, apex, at, at);
@@ -506,7 +646,7 @@ impl NavMesh {
                 if apex == left || side(apex, right, l) < 0.0 {
                     (left, left_at) = (l, i);
                 } else {
-                    points.push((right, gates[right_at].2));
+                    points.push((right, gates[right_at].2, walls[right_at].1));
                     let at = right_at;
                     apex = right;
                     (left, right, left_at, right_at) = (apex, apex, at, at);
@@ -516,11 +656,36 @@ impl NavMesh {
             }
             i += 1;
         }
-        let mut route: Vec<Vector3<f32>> = points
-            .into_iter()
-            .filter(|&(at, _)| at != start)
-            .map(|(at, poly)| Vector3::new(at[0], self.floor_of(poly), at[1]))
-            .collect();
+        points.retain(|&(at, _, _)| at != start);
+        // Each corner set out from the wall's corner it turns round, on the outside of the turn,
+        // so that the ways in and out both keep `clearance` from it - drawing the portal's end
+        // in keeps them clear of it only along the portal - where there is floor to.
+        let corners: Vec<[f32; 2]> = points.iter().map(|&(at, _, _)| at).collect();
+        let mut route: Vec<Vector3<f32>> = Vec::with_capacity(points.len() + 1);
+        for (k, &(at, poly, wall)) in points.iter().enumerate() {
+            let before = if k == 0 { start } else { corners[k - 1] };
+            let after = corners.get(k + 1).copied().unwrap_or(end);
+            let unit = |v: [f32; 2]| {
+                let n = v[0].hypot(v[1]);
+                (n > 1.0e-5).then(|| [v[0] / n, v[1] / n])
+            };
+            let out = unit([at[0] - before[0], at[1] - before[1]])
+                .zip(unit([after[0] - at[0], after[1] - at[1]]))
+                .and_then(|(i, o)| unit([i[0] - o[0], i[1] - o[1]]));
+            let floor = self.floor_of(poly);
+            // Only round a corner jutting out into the way: floor on three sides of it. Along a
+            // wall that runs straight on, there is nothing to go round.
+            let e = self.cell_size * 0.1;
+            let floored = [(-e, -e), (e, -e), (-e, e), (e, e)]
+                .iter()
+                .filter(|&&(dx, dz)| self.poly_at(Vector3::new(wall[0] + dx, floor, wall[1] + dz)).is_some())
+                .count();
+            let set_out = out
+                .filter(|_| floored == 3)
+                .map(|o| Vector3::new(wall[0] + o[0] * clearance * std::f32::consts::SQRT_2, floor, wall[1] + o[1] * clearance * std::f32::consts::SQRT_2))
+                .filter(|&p| self.poly_at(p).is_some());
+            route.push(set_out.unwrap_or(Vector3::new(at[0], floor, at[1])));
+        }
         route.push(Vector3::new(to.x, self.floor_of(goal), to.z));
         route.dedup();
         route.reverse();
@@ -568,6 +733,88 @@ impl NavMesh {
         best.into_iter().map(|(n, (_, cost))| (n, cost)).collect()
     }
 
+    /// The corners of the ground it covers, on the plan, at the origin's height.
+    pub fn bounds(&self) -> (Vector3<f32>, Vector3<f32>) {
+        let far = Vector3::new(self.width as f32 * self.cell_size, 0.0, self.depth as f32 * self.cell_size);
+        (self.origin, self.origin + far)
+    }
+
+    /// How many polygons there are that have not been made afresh as others.
+    pub fn live(&self) -> usize {
+        self.polygons.iter().filter(|p| p.x0 != p.x1).count()
+    }
+
+    /// The polygons over `at` on the plan, on every storey.
+    pub fn over_spot(&self, at: Vector3<f32>) -> Vec<Poly> {
+        let x = ((at.x - self.origin.x) / self.cell_size).floor();
+        let z = ((at.z - self.origin.z) / self.cell_size).floor();
+        if !(x >= 0.0 && z >= 0.0 && (x as usize) < self.width && (z as usize) < self.depth) {
+            return Vec::new();
+        }
+        let (x, z) = (x as u32, z as u32);
+        self.buckets[(z as usize / BUCKET) * self.width.div_ceil(BUCKET) + x as usize / BUCKET]
+            .iter()
+            .copied()
+            .filter(|&n| {
+                let p = &self.polygons[n as usize];
+                (p.x0..p.x1).contains(&x) && (p.z0..p.z1).contains(&z)
+            })
+            .collect()
+    }
+
+    /// The point of polygon `n` nearest `at`, on its floor.
+    pub fn closest_point(&self, n: Poly, at: Vector3<f32>) -> Vector3<f32> {
+        let p = &self.polygons[n as usize];
+        let cs = self.cell_size;
+        // Kept a little in from its edges, to be inside it.
+        let inset = cs * 0.25;
+        let clamp = |v: f32, from: u32, to: u32, o: f32| v.clamp(o + from as f32 * cs + inset, o + to as f32 * cs - inset);
+        Vector3::new(clamp(at.x, p.x0, p.x1, self.origin.x), self.floor_of(n), clamp(at.z, p.z0, p.z1, self.origin.z))
+    }
+
+    /// Somewhere in polygon `n`, on its floor, picked by `pick`, which gives a number under what
+    /// it is given.
+    pub fn random_point(&self, n: Poly, pick: &mut dyn FnMut(usize) -> usize) -> Vector3<f32> {
+        let p = &self.polygons[n as usize];
+        let cs = self.cell_size;
+        let x = p.x0 as usize + pick((p.x1 - p.x0).max(1) as usize);
+        let z = p.z0 as usize + pick((p.z1 - p.z0).max(1) as usize);
+        self.origin + Vector3::new((x as f32 + 0.5) * cs, p.floor, (z as f32 + 0.5) * cs)
+    }
+
+    /// The floor nearest `point` within `near` meters of it on the plan, at its height - no more
+    /// than `level` above or below it: where it is, if there is floor there, or else the nearest
+    /// point of the nearest such polygon. None with no floor at its height near it.
+    pub fn floor_near(&self, point: Vector3<f32>, near: f32, level: f32) -> Option<Vector3<f32>> {
+        let at_height = |n: Poly| (self.floor_of(n) - point.y).abs() <= level;
+        if let Some(n) = self.over_spot(point).into_iter().filter(|&n| at_height(n)).min_by(|&a, &b| {
+            (self.floor_of(a) - point.y).abs().total_cmp(&(self.floor_of(b) - point.y).abs())
+        }) {
+            return Some(Vector3::new(point.x, self.floor_of(n), point.z));
+        }
+        let cols = self.width.div_ceil(BUCKET) as isize;
+        let rows = self.depth.div_ceil(BUCKET) as isize;
+        let reach = (near / self.cell_size / BUCKET as f32).ceil() as isize;
+        let bx = ((point.x - self.origin.x) / self.cell_size) as isize / BUCKET as isize;
+        let bz = ((point.z - self.origin.z) / self.cell_size) as isize / BUCKET as isize;
+        let mut best: Option<(Vector3<f32>, f32)> = None;
+        for cz in (bz - reach).max(0)..=(bz + reach).min(rows - 1) {
+            for cx in (bx - reach).max(0)..=(bx + reach).min(cols - 1) {
+                for &n in &self.buckets[(cz * cols + cx) as usize] {
+                    if !at_height(n) {
+                        continue;
+                    }
+                    let spot = self.closest_point(n, point);
+                    let d = (spot.x - point.x).hypot(spot.z - point.z);
+                    if d <= near && best.is_none_or(|(_, b)| d < b) {
+                        best = Some((spot, d));
+                    }
+                }
+            }
+        }
+        best.map(|(spot, _)| spot)
+    }
+
     /// How much memory it takes, about, in bytes.
     pub fn bytes(&self) -> usize {
         self.polygons.len() * std::mem::size_of::<Polygon>()
@@ -609,10 +856,10 @@ mod tests {
     }
 
     #[test]
-    fn an_open_floor_is_one_polygon_and_the_way_across_it_is_straight() {
+    fn an_open_floor_is_a_few_polygons_and_the_way_across_it_is_straight() {
         let grid = grid(40, 30, |_, _| true);
         let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
-        assert_eq!(mesh.len(), 1);
+        assert_eq!(mesh.len(), 3 * 2, "16 cells along a side at most");
         let to = Vector3::new(18.0, 0.0, 13.0);
         assert_eq!(mesh.route(Vector3::new(1.0, 0.0, 1.0), to, f32::INFINITY, 0.3, |_| 0.0), vec![to]);
     }
@@ -622,13 +869,20 @@ mod tests {
         // An L: along the bottom, then up the right-hand side; a wall in the corner of the L.
         let grid = grid(40, 40, |x, z| z < 8 || x >= 32);
         let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
-        assert_eq!(mesh.len(), 2);
+        assert_eq!(mesh.len(), 3 + 2, "the bottom of the L in three, its side in two");
         let from = Vector3::new(1.0, 0.0, 2.0);
         let to = Vector3::new(18.0, 0.0, 19.0);
         let route = mesh.route(from, to, f32::INFINITY, 0.3, |_| 0.0);
         assert_eq!(route.len(), 2, "one turn, at the corner: {route:?}");
-        let corner = route[1];
-        assert!((corner.x - (16.0 + 0.3)).abs() < 0.05 && (corner.z - 4.0).abs() < 0.05, "{corner:?}");
+        // Its ways in and out keep the clearance from the wall's corner, and no more than a
+        // little over it.
+        let wall = Vector3::new(16.0, 0.0, 4.0);
+        let gap = |a: Vector3<f32>, b: Vector3<f32>| {
+            let t = ((wall - a).dot(&(b - a)) / (b - a).norm_squared()).clamp(0.0, 1.0);
+            (a + (b - a) * t - wall).norm()
+        };
+        let closest = gap(from, route[1]).min(gap(route[1], route[0]));
+        assert!((0.25..0.5).contains(&closest), "{closest} from the corner: {route:?}");
         assert!(on_floor(&mesh, from, &route));
     }
 
@@ -670,7 +924,7 @@ mod tests {
             }
         }
         let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
-        assert_eq!(mesh.len(), 10);
+        assert_eq!(mesh.len(), 1 + 8 + 2, "the bottom, each step, and the landing in two");
         let route = mesh.route(Vector3::new(1.0, 0.0, 1.0), Vector3::new(19.0, 1.8, 1.0), f32::INFINITY, 0.25, |_| 0.0);
         assert_eq!(route.first().map(|p| p.y), Some(1.8));
         assert_eq!(mesh.poly_at(Vector3::new(19.0, 1.8, 1.0)).map(|n| mesh.floor_of(n)), Some(1.8));
@@ -687,12 +941,15 @@ mod tests {
             }
         }
         let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
-        assert_eq!(mesh.len(), 2);
+        assert_eq!(mesh.len(), 4 + 2, "the ground in four, the floor over it in two");
         let ground = mesh.poly_at(Vector3::new(2.0, 0.1, 2.0)).unwrap();
         let upstairs = mesh.poly_at(Vector3::new(2.0, 3.9, 2.0)).unwrap();
         assert_ne!(ground, upstairs);
         assert_eq!(mesh.floor_of(upstairs), 4.0);
-        assert!(mesh.portals(ground).is_empty() && mesh.portals(upstairs).is_empty(), "no stair between them");
+        let crosses = (0..mesh.len() as Poly)
+            .flat_map(|n| mesh.portals(n).iter().map(move |p| (n, p.to)))
+            .any(|(a, b)| mesh.polygon(a).storey != mesh.polygon(b).storey);
+        assert!(!crosses, "no stair between them");
     }
 
     #[test]
@@ -743,4 +1000,61 @@ mod tests {
         assert_eq!(mesh.poly_at(Vector3::new(1.0, 0.0, 1.0)), None);
         assert!(mesh.nearest(Vector3::new(1.0, 0.0, 1.0)).is_some());
     }
+
+    #[test]
+    fn a_door_opened_and_shut_is_caught_up_with_where_it_is_and_nowhere_else() {
+        // Two rooms with a wall between, and a doorway in it, shut; a floor of its own beyond.
+        let mut grid = grid(80, 20, |x, _| x != 20);
+        let area = |x: usize, _: usize| u8::from(x >= 40);
+        let mesh_far = |mesh: &NavMesh| mesh.over_spot(Vector3::new(35.0, 0.0, 5.0))[0];
+        let mut mesh = NavMesh::build(&grid, Vector3::zeros(), area);
+        let far = mesh_far(&mesh);
+        grid.track_changes();
+        let from = Vector3::new(2.0, 0.0, 1.0);
+        let to = Vector3::new(18.0, 0.0, 1.0);
+        assert!(mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0).is_empty(), "shut");
+        // Opened: two cells of the wall.
+        grid.set(20, 9, true);
+        grid.set(20, 10, true);
+        assert!(mesh.sync(&mut grid, area));
+        let open = mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0);
+        assert!(!open.is_empty(), "open");
+        assert!(open.iter().any(|p| (p.x - 10.0).abs() < 0.6 && (4.4..5.6).contains(&p.z)), "through the doorway: {open:?}");
+        assert_eq!(mesh_far(&mesh), far, "the far floor left as it was");
+        // As a navmesh made from scratch would have it.
+        let fresh = NavMesh::build(&grid, Vector3::zeros(), area);
+        assert_eq!(fresh.route(from, to, f32::INFINITY, 0.25, |_| 0.0), open);
+        // Shut again.
+        grid.set(20, 9, false);
+        grid.set(20, 10, false);
+        assert!(mesh.sync(&mut grid, area));
+        assert!(mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0).is_empty(), "shut again");
+        assert!(!mesh.sync(&mut grid, area), "nothing more to catch up with");
+        // Over and over, it stays as small as it should.
+        for k in 0..50 {
+            grid.set(20, 9, k % 2 == 0);
+            mesh.sync(&mut grid, area);
+        }
+        assert!(mesh.portal_count() < 4 * fresh.portal_count() + 64, "{} portals", mesh.portal_count());
+        assert_eq!(mesh.live(), NavMesh::build(&grid, Vector3::zeros(), area).len());
+    }
+
+    #[test]
+    fn the_floor_near_a_point_is_found_at_its_height() {
+        let mut grid = WalkGrid::with_storeys(40, 40, 2, 0.5);
+        for z in 0..40 {
+            for x in 0..40 {
+                grid.set(x, z, x < 10);
+                grid.set(x, z + 40, x >= 30);
+                grid.set_floor(x, z + 40, 4.0);
+            }
+        }
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
+        let ground = mesh.floor_near(Vector3::new(7.0, 0.0, 5.0), 6.0, 1.0).unwrap();
+        assert!((ground.x - 4.875).abs() < 0.01 && ground.y == 0.0, "{ground:?}");
+        let up = mesh.floor_near(Vector3::new(13.0, 4.2, 5.0), 6.0, 1.0).unwrap();
+        assert!(up.x >= 15.0 && up.y == 4.0, "{up:?}");
+        assert_eq!(mesh.floor_near(Vector3::new(10.0, 2.0, 5.0), 6.0, 1.0), None, "nothing at that height");
+    }
 }
+

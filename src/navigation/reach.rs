@@ -42,6 +42,19 @@ impl Reach {
     }
 }
 
+impl Reach {
+    /// Those polygons of `mesh` that can be got to from `from`, by any way there.
+    pub fn on_mesh(mesh: &crate::navigation::navmesh::NavMesh, from: Vector3<f32>) -> Self {
+        let costs = mesh.costs_from(from, f32::INFINITY, |_| 0.0);
+        Self::of((0..mesh.len() as u32).map(|n| costs.contains_key(&n)))
+    }
+
+    /// Whether there is any way to `to` over `mesh` at all, as it was when this was worked out.
+    pub fn to_on_mesh(&self, mesh: &crate::navigation::navmesh::NavMesh, to: Vector3<f32>) -> bool {
+        self.0.is_empty() || mesh.nearest(to).is_some_and(|n| self.can(n as usize))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

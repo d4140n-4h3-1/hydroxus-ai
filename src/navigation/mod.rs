@@ -7,6 +7,7 @@
 //! - [`reach`]: which cells can be got to at all, a bit each.
 //! - [`route`]: routes over that ground, as points on the floor - to somewhere, or a trip away.
 //! - [`wander`]: going about one's business in a city, off the roads and the gangs' turf.
+//! - [`walk`]: getting about over the navmesh - routes, trips, spots near, the floor at a height.
 //! - [`trip`]: getting about over more than one floor, and across by ferry where that is quicker.
 //! - [`ride`]: taking a train from one station to another.
 //! - [`steer`]: making way for others in a corridor, walking or standing about.
@@ -20,4 +21,5 @@ pub mod ride;
 pub mod route;
 pub mod steer;
 pub mod trip;
+pub mod walk;
 pub mod wander;
