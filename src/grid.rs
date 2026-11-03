@@ -260,7 +260,7 @@ impl WalkGrid {
 
     pub fn set(&mut self, x: usize, z: usize, walkable: bool) {
         self.cells[z * self.width + x] = walkable;
-        self.links.take();
+        self.relink((x, z));
     }
 
     pub fn is_walkable(&self, x: usize, z: usize) -> bool {
@@ -269,7 +269,33 @@ impl WalkGrid {
 
     pub fn set_floor(&mut self, x: usize, z: usize, height: f32) {
         self.floors[z * self.width + x] = height;
-        self.links.take();
+        self.relink((x, z));
+    }
+
+    /// The links of the cells a change to cell `(x, row)` touches, worked out again if they have
+    /// been worked out at all: its own and its neighbours' on the plan, on every storey - a cell's
+    /// links look no further than a step. Thrown away and worked out afresh for the whole grid,
+    /// as they were, a city's took seconds - for a door opened, in the middle of a game.
+    fn relink(&mut self, cell: (usize, usize)) {
+        let Some(mut links) = self.links.take() else {
+            return;
+        };
+        let (x, z) = self.plan(cell);
+        for dz in -1isize..=1 {
+            for dx in -1isize..=1 {
+                let (Some(nx), Some(nz)) = (x.checked_add_signed(dx), z.checked_add_signed(dz)) else {
+                    continue;
+                };
+                if nx >= self.width || nz >= self.depth {
+                    continue;
+                }
+                for storey in 0..self.storeys {
+                    let index = (nz + storey * self.depth) * self.width + nx;
+                    links[index] = self.links_of(index);
+                }
+            }
+        }
+        let _ = self.links.set(links);
     }
 
     /// How high the floor is in a cell, in meters.
@@ -307,21 +333,43 @@ impl WalkGrid {
 
     /// Where a step each way from every cell lands, worked out now if it has not been yet.
     fn links(&self) -> &[Links] {
-        self.links.get_or_init(|| {
-            (0..self.cells.len())
-                .map(|index| {
-                    let mut links = [0; 8];
-                    if self.cells[index] {
-                        let cell = (index % self.width, index / self.width);
-                        for (way, &(dx, dz)) in WAYS.iter().enumerate() {
-                            if let Some(to) = self.step_to(cell, dx, dz) {
-                                links[way] = u8::try_from(self.storey(to) + 1).unwrap_or(0);
-                            }
-                        }
-                    }
-                    links
-                })
-                .collect()
+        self.links.get_or_init(|| self.all_links())
+    }
+
+    /// Where a step each way from cell `index` lands (see [`Links`]).
+    fn links_of(&self, index: usize) -> Links {
+        let mut links = [0; 8];
+        if self.cells[index] {
+            let cell = (index % self.width, index / self.width);
+            for (way, &(dx, dz)) in WAYS.iter().enumerate() {
+                if let Some(to) = self.step_to(cell, dx, dz) {
+                    links[way] = u8::try_from(self.storey(to) + 1).unwrap_or(0);
+                }
+            }
+        }
+        links
+    }
+
+    /// Every cell's links: a band of cells each on as many threads as there are cores, which in a
+    /// city of tens of millions of cells is the difference between seconds and a fraction of one.
+    /// On the web, where there are no threads to be had, one after another.
+    fn all_links(&self) -> Vec<Links> {
+        let cells = self.cells.len();
+        let threads = if cfg!(target_arch = "wasm32") {
+            1
+        } else {
+            std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 64)
+        };
+        if threads == 1 || cells < 1 << 16 {
+            return (0..cells).map(|index| self.links_of(index)).collect();
+        }
+        let band = cells.div_ceil(threads);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..cells)
+                .step_by(band)
+                .map(|from| scope.spawn(move || (from..(from + band).min(cells)).map(|index| self.links_of(index)).collect::<Vec<Links>>()))
+                .collect();
+            workers.into_iter().flat_map(|worker| worker.join().expect("a links thread panicked")).collect()
         })
     }
 
@@ -683,6 +731,48 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A grid of `width` by `depth` on two storeys, its floor walkable but for a scatter of
+    /// cells, and a floor up above over part of it at a stair's height and more.
+    fn scattered(width: usize, depth: usize) -> WalkGrid {
+        let mut grid = WalkGrid::with_storeys(width, depth, 2, 0.5);
+        for z in 0..depth {
+            for x in 0..width {
+                grid.set(x, z, (x * 7 + z * 13) % 11 != 0);
+                if x > width / 2 && z > depth / 3 {
+                    let (ux, row) = grid.on_storey((x, z), 1);
+                    grid.set(ux, row, (x + z) % 5 != 0);
+                    grid.set_floor(ux, row, if x < width / 2 + 3 { 0.25 * (x - width / 2) as f32 } else { 3.0 });
+                }
+            }
+        }
+        grid
+    }
+
+    #[test]
+    fn links_worked_out_on_many_threads_are_those_worked_out_one_by_one() {
+        // Big enough to be split among threads.
+        let grid = scattered(300, 300);
+        let one_by_one: Vec<Links> = (0..grid.cells.len()).map(|index| grid.links_of(index)).collect();
+        assert_eq!(grid.all_links(), one_by_one);
+    }
+
+    #[test]
+    fn links_mended_after_a_change_are_those_worked_out_afresh() {
+        let mut grid = scattered(60, 40);
+        let _ = grid.links();
+        // A door shut and opened, a floor raised, on the ground and up above.
+        grid.set(10, 10, false);
+        grid.set(31, 20, true);
+        let (ux, row) = grid.on_storey((40, 30), 1);
+        grid.set_floor(ux, row, 0.5);
+        grid.set(ux, row, true);
+        let mended = grid.links().to_vec();
+        let afresh: Vec<Links> = (0..grid.cells.len()).map(|index| grid.links_of(index)).collect();
+        assert_eq!(mended, afresh);
+    }
+
     #[test]
     fn routes_within_a_bound_are_those_of_a_search_with_none_as_far_as_they_go() {
         // A room with a wall across it but for a gap, and a corner kept dear: the bounded search,
@@ -735,7 +825,6 @@ mod tests {
         assert_eq!(same, plain);
     }
 
-    use super::*;
 
     /// Builds a grid from rows of `#` (wall) and `.` (floor).
     fn grid(rows: &[&str]) -> WalkGrid {
