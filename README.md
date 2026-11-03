@@ -2,7 +2,7 @@
 
 Stealth AI for games on [Hydroxus](https://github.com/d4140n-4h3-1/Hydroxus), the Vulkan fork
 of [Fyrox](https://github.com/FyroxEngine/Fyrox): NPCs that walk a level, see what is in front
-of them, hear what carries to them, and hunt the player through Metal Gear's alert phases. It is
+of them, hear what carries to them, and hunt the player through Metal Gear's alert phases - and fly, ride the trains, drive the streets and race. It is
 what the droids and drones of [Maze](https://github.com/d4140n-4h3-1/MazeGame) think with.
 
 It knows nothing of the engine but its vectors (nalgebra's, which the engine re-exports). The game
@@ -11,7 +11,7 @@ this decides what an NPC makes of what is round it.
 
 | Module    | What it does |
 |-----------|--------------|
-| `grid`    | A level's walkable ground as a grid of cells, with the floor's height in each, stepping only between floors a stair apart, not up a ledge; the cheapest ways across it, keeping to the middle of the corridors - or, weighted, out of harm's way; whether one cell can be seen from another along the ground; and a small seeded random number generator. |
+| `grid`    | A level's walkable ground as a grid of cells, with the floor's height in each, stepping only between floors a stair apart, not up a ledge; which cells can be got to at all; the cheapest ways across it, keeping to the middle of the corridors - or, weighted, out of harm's way; whether one cell can be seen from another along the ground; and a small seeded random number generator. |
 | `route`   | Routes over the grid, as points on the floor: to somewhere, within a reach, or a trip away; routes that keep out of ground made dear, such as ground an enemy can see; trips to somewhere off ground kept off, such as a city's roads; and a spot on the floor near a point. |
 | `sight`   | What an NPC can see: clearly in a cone in front of it, and near out of the corner of its eye, but nothing behind it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark. |
 | `hearing` | How far a noise carries: along the corridors, not through the walls. |
@@ -23,6 +23,10 @@ this decides what an NPC makes of what is round it.
 | `pace`    | Sprinting now and then in a chase, never as it starts; and, for one with breath to keep, easing off to a jog before it runs out, and keeping some back for a last burst. |
 | `threat`  | A weapon pointed at an NPC: in the middle of the view or not; how long it stands for it, warns, warns again and then does something about it. |
 | `group`   | Walking about together: a pair one beside the other, a group fanned out behind the one leading it. |
+| `ride`    | Taking a train: up to the platform, waiting beside a doorway no one else is taking, on once the doors are open with time to get on, standing inside as it rides, and off at the station it is going to. |
+| `flight`  | Flying free: a flier's way through the air - straight there, up and over what is in the way, or along the floor under a roof, its corners cut. |
+| `traffic` | Bikes going about a city's streets: the junctions and lanes, stop lights' cycles, keeping to the right, turning at the junctions, stopping on red and for anyone in the road. |
+| `racing`  | Riding a race: steering for the gates round a circuit, easing off into the turns, over the speed pads ahead, and pulling out round a bike in front. |
 
 ```toml
 [dependencies]

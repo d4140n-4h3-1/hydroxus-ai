@@ -15,6 +15,10 @@
 //! - [`pace`]: sprinting now and then in a chase, and keeping breath for a last burst.
 //! - [`threat`]: a weapon pointed at an NPC: its warnings, then its doing something about it.
 //! - [`group`]: walking about together, a pair or a group about the one leading it.
+//! - [`ride`]: taking a train from one station to another.
+//! - [`flight`]: flying free, through the air at any height, rather than along the floor.
+//! - [`traffic`]: bikes going about a city's streets, keeping to their lanes and the lights.
+//! - [`racing`]: riding a race round a circuit, against others.
 //!
 //! The crate never touches a scene. The game casts the rays that say whether anything is in the
 //! way, moves the nodes and plays the animations; this decides what an NPC makes of what is
@@ -23,16 +27,20 @@
 //! Directions along the ground are headings, in radians, left positive from the world's +z.
 
 pub mod alert;
+pub mod flight;
 pub mod grid;
 pub mod group;
 pub mod hearing;
 pub mod join;
 pub mod pace;
+pub mod racing;
+pub mod ride;
 pub mod route;
 pub mod search;
 pub mod sight;
 pub mod steer;
 pub mod threat;
+pub mod traffic;
 pub mod trip;
 
 pub use nalgebra;
