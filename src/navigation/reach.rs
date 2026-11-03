@@ -1,12 +1,11 @@
-//! Which of a grid's cells can be got to from somewhere - where the player started, say - a bit
-//! each by index. Kept so that NPCs going about their business never set off for where they
-//! cannot get to: there, a search for the way would go over every cell it could within its bound
-//! before it gave up - the tenth part of a second and more.
+//! Which of a navmesh's polygons can be got to from somewhere - where the player is, say - a bit
+//! each by number. Kept so that NPCs going about their business never set off for where they
+//! cannot get to: there, a search for the way would go over every polygon it could within its
+//! bound before it gave up.
 
-use crate::navigation::grid::WalkGrid;
 use nalgebra::Vector3;
 
-/// Which of a grid's cells can be got to, a bit each by index - or, empty, all of them.
+/// Which polygons can be got to, a bit each by number - or, empty, all of them.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Reach(Vec<u64>);
 
@@ -25,24 +24,11 @@ impl Reach {
         Self(bits)
     }
 
-    /// Those cells of `grid` that are reached from `from`, by any way there.
-    pub fn from(grid: &WalkGrid, from: (usize, usize)) -> Self {
-        let routes = grid.routes_from(from, f32::INFINITY);
-        Self::of((0..grid.width * grid.rows()).map(|i| routes.cost(i).is_some()))
-    }
-
-    /// Whether the cell `index` can be got to.
+    /// Whether the one numbered `index` can be got to.
     pub fn can(&self, index: usize) -> bool {
         self.0.is_empty() || self.0.get(index / 64).is_some_and(|bits| bits & (1 << (index % 64)) != 0)
     }
 
-    /// Whether there is any way to `to` over `grid`, whose corner is at `origin`, at all.
-    pub fn to(&self, (grid, origin): (&WalkGrid, Vector3<f32>), to: Vector3<f32>) -> bool {
-        self.0.is_empty() || grid.walkable_cell(origin, to).is_some_and(|(x, z)| self.can(z * grid.width + x))
-    }
-}
-
-impl Reach {
     /// Those polygons of `mesh` that can be got to from `from`, by any way there.
     pub fn on_mesh(mesh: &crate::navigation::navmesh::NavMesh, from: Vector3<f32>) -> Self {
         let costs = mesh.costs_from(from, f32::INFINITY, |_| 0.0);

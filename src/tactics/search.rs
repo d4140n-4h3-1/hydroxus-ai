@@ -365,7 +365,7 @@ mod tests {
             .filter(|&c| {
                 let d = at(c) - at(lost);
                 let d = (d.x * d.x + d.z * d.z).sqrt();
-                (5.0..9.0).contains(&d) && grid.sees_across(c, lost)
+                (5.0..9.0).contains(&d) && mesh.sees_across(at(c), at(lost))
             })
             .collect::<Vec<_>>();
         if behind.is_empty() {

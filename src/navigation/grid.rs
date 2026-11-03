@@ -1,22 +1,14 @@
-//! A level's walkable ground as a grid of cells, and the cheapest ways across it.
+//! A level's walkable ground as a grid of cells: what a survey of a level finds, and what its
+//! navmesh is made from (see [`crate::navigation::navmesh`]).
 //!
 //! Nothing says which parts of a level are floor, so the game samples it on a grid and marks
-//! the cells someone could stand in, with how high the floor is there. Routes between cells come
-//! from a search that keeps to the middle of the corridors (see [`WalkGrid::routes_from`]), and
-//! walking distances from a breadth-first one (see [`WalkGrid::distances_from`]).
+//! the cells someone could stand in, with how high the floor is there, and where a step can be
+//! taken from one to the next. Once the navmesh is made, the grid can go: routes, and everything
+//! else that finds its way about, are the navmesh's. Walking distances across it, a cell at a
+//! time, are for laying out a level (see [`WalkGrid::distances_from`]).
 
 use nalgebra::Vector3;
-use std::{
-    cell::RefCell,
-    cmp::Ordering,
-    collections::{BinaryHeap, VecDeque},
-    sync::OnceLock,
-};
-
-/// How much dearer a step is into a cell at the edge of the floor, next to a wall, than one out in
-/// the open: enough that a route keeps to the middle of a corridor, not so much that it goes far
-/// out of its way for it.
-const EDGE_COST: f32 = 2.0;
+use std::{collections::VecDeque, sync::OnceLock};
 
 /// How much higher or lower one cell's floor can be than its neighbour's for a step between them:
 /// a stair's step, or two where a cell spans them, but not a ledge or the top of a crate.
@@ -50,9 +42,6 @@ pub struct WalkGrid {
     /// Where a step each of the [`WAYS`] from each cell lands (see [`Links`]): worked out once,
     /// the first time a search needs it, and again only after the grid changes.
     links: OnceLock<Vec<Links>>,
-    /// The cells changed since they were last taken, once asked to keep them (see
-    /// [`WalkGrid::track_changes`]): for a navmesh made from it to catch up with.
-    changes: Option<Vec<(usize, usize)>>,
 }
 
 impl PartialEq for WalkGrid {
@@ -71,144 +60,6 @@ const WAYS: [(isize, isize); 8] = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (
 /// more than the storey it lands on. Read off a table, a search costs a lookup a step instead of
 /// looking through every storey of each neighbour, and its neighbours' neighbours for the edges.
 type Links = [u8; 8];
-
-/// What a search through a big grid needs for every cell, kept from one search to the next rather
-/// than made afresh: what reaching each costs, and from where. A cell's entries count only if it
-/// is stamped with the search's own number.
-#[derive(Default)]
-struct Scratch {
-    costs: Vec<f32>,
-    previous: Vec<u32>,
-    stamps: Vec<u32>,
-    search: u32,
-}
-
-impl Scratch {
-    /// Ready for a new search over `cells` cells, every entry unreached.
-    fn begin(&mut self, cells: usize) {
-        if self.stamps.len() < cells {
-            self.costs.resize(cells, 0.0);
-            self.previous.resize(cells, 0);
-            self.stamps.resize(cells, 0);
-        }
-        self.search = self.search.wrapping_add(1);
-        if self.search == 0 {
-            self.stamps.fill(0);
-            self.search = 1;
-        }
-    }
-
-    fn cost(&self, at: usize) -> Option<f32> {
-        (self.stamps[at] == self.search).then(|| self.costs[at])
-    }
-
-    fn reach(&mut self, at: usize, cost: f32, from: usize) {
-        self.stamps[at] = self.search;
-        self.costs[at] = cost;
-        self.previous[at] = from as u32;
-    }
-}
-
-thread_local! {
-    static SCRATCH: RefCell<Scratch> = RefCell::default();
-}
-
-/// A cell waiting to be searched from by [`WalkGrid::route_between_weighted`]: the most it could
-/// cost by way of it at least, what getting there cost, and which it is - the cheapest first, and
-/// of those the furthest along.
-#[derive(Debug, PartialEq)]
-struct Open(f32, f32, usize);
-
-impl Eq for Open {}
-
-impl Ord for Open {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other.0.total_cmp(&self.0).then(self.1.total_cmp(&other.1))
-    }
-}
-
-impl PartialOrd for Open {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// The cheapest ways from one cell to every other, found by [`WalkGrid::routes_from`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct Routes {
-    width: usize,
-    reached: Reached,
-}
-
-/// What it costs to get to each cell reached, in cells walked with the edges dearer, and the cell
-/// it is reached from, as an index: for every cell of the grid, from a search with no bound to it;
-/// from one with a bound, for only those it reached, in the order of their indices - a few
-/// thousand of a grid that can have tens of millions, which would cost far more to make for each
-/// search than the search itself.
-#[derive(Debug, Clone, PartialEq)]
-enum Reached {
-    Every { costs: Vec<Option<f32>>, previous: Vec<usize> },
-    Some(Vec<(usize, f32, usize)>),
-}
-
-impl Routes {
-    /// What it costs to get to the cell `index`; none if it cannot be reached.
-    pub fn cost(&self, index: usize) -> Option<f32> {
-        self.entry(index).map(|(cost, _)| cost)
-    }
-
-    /// Each cell reached, by index, and what getting to it costs - in the order of their indices.
-    pub fn reached(&self) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
-        match &self.reached {
-            Reached::Every { costs, .. } => {
-                Box::new(costs.iter().enumerate().filter_map(|(i, cost)| cost.map(|cost| (i, cost))))
-            }
-            Reached::Some(cells) => Box::new(cells.iter().map(|&(i, cost, _)| (i, cost))),
-        }
-    }
-
-    fn entry(&self, index: usize) -> Option<(f32, usize)> {
-        match &self.reached {
-            Reached::Every { costs, previous } => Some((costs.get(index).copied().flatten()?, previous[index])),
-            Reached::Some(cells) => cells
-                .binary_search_by_key(&index, |&(i, _, _)| i)
-                .ok()
-                .map(|k| (cells[k].1, cells[k].2)),
-        }
-    }
-
-    /// The cells from the start to `goal`, both included; none if it cannot be reached.
-    pub fn path_to(&self, goal: (usize, usize)) -> Option<Vec<(usize, usize)>> {
-        let mut at = goal.1 * self.width + goal.0;
-        let (mut cost, _) = self.entry(at)?;
-        let mut path = vec![goal];
-        while cost != 0.0 {
-            at = self.entry(at)?.1;
-            cost = self.entry(at)?.0;
-            path.push((at % self.width, at / self.width));
-        }
-        path.reverse();
-        Some(path)
-    }
-}
-
-/// A cell waiting to be walked from, cheapest first.
-#[derive(Debug, PartialEq)]
-struct Frontier(f32, usize);
-
-impl Eq for Frontier {}
-
-impl Ord for Frontier {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other.0.total_cmp(&self.0)
-    }
-}
-
-impl PartialOrd for Frontier {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
 
 impl WalkGrid {
     /// A grid `width` cells by `depth`, each `cell_size` meters across, with nowhere walkable yet:
@@ -231,7 +82,6 @@ impl WalkGrid {
             cells: vec![false; width * depth * storeys],
             floors: vec![0.0; width * depth * storeys],
             links: OnceLock::new(),
-            changes: None,
         }
     }
 
@@ -265,20 +115,6 @@ impl WalkGrid {
     pub fn set(&mut self, x: usize, z: usize, walkable: bool) {
         self.cells[z * self.width + x] = walkable;
         self.relink((x, z));
-        if let Some(changes) = self.changes.as_mut() {
-            changes.push((x, z));
-        }
-    }
-
-    /// Keeps the cells changed from now on, for [`WalkGrid::take_changes`]: as a door opens, say,
-    /// for a navmesh made from it to catch up (see `NavMesh::sync`).
-    pub fn track_changes(&mut self) {
-        self.changes.get_or_insert_with(Vec::new);
-    }
-
-    /// The cells changed since the last time, as `(x, row)`, once tracked.
-    pub fn take_changes(&mut self) -> Vec<(usize, usize)> {
-        self.changes.as_mut().map(std::mem::take).unwrap_or_default()
     }
 
     pub fn is_walkable(&self, x: usize, z: usize) -> bool {
@@ -288,9 +124,6 @@ impl WalkGrid {
     pub fn set_floor(&mut self, x: usize, z: usize, height: f32) {
         self.floors[z * self.width + x] = height;
         self.relink((x, z));
-        if let Some(changes) = self.changes.as_mut() {
-            changes.push((x, z));
-        }
     }
 
     /// The links of the cells a change to cell `(x, row)` touches, worked out again if they have
@@ -406,171 +239,6 @@ impl WalkGrid {
         Some((nz + (link as usize - 1) * self.depth) * self.width + nx)
     }
 
-    /// Each step that can be taken from cell `index`: where it lands, how long it is - longer
-    /// across a corner, never cutting past a wall's - and how dear the cell it lands in is, the
-    /// edge of the floor being dearer.
-    fn each_step(&self, links: &[Links], index: usize, mut step: impl FnMut(usize, f32, f32)) {
-        let from = links[index];
-        for (way, &(dx, dz)) in WAYS.iter().enumerate() {
-            let Some(to) = self.landing(index, way, from[way]) else {
-                continue;
-            };
-            let diagonal = dx != 0 && dz != 0;
-            if diagonal && (from[if dx < 0 { 0 } else { 1 }] == 0 || from[if dz < 0 { 2 } else { 3 }] == 0) {
-                continue;
-            }
-            // Next to a wall or a drop, even across a corner: some way out of it cannot be taken.
-            let weight = if links[to].contains(&0) { EDGE_COST } else { 1.0 };
-            step(to, if diagonal { std::f32::consts::SQRT_2 } else { 1.0 }, weight);
-        }
-    }
-
-    /// The cheapest ways from `start` to every walkable cell it connects to, going across
-    /// corners as well as along the grid, but never cutting past a wall's corner, and up and down
-    /// stairs from one storey to another. Steps into cells at the edge of the floor are dearer,
-    /// so that routes keep to the middle. The search goes no further than routes costing
-    /// `within`: cells much further away are left unreached.
-    pub fn routes_from(&self, start: (usize, usize), within: f32) -> Routes {
-        self.routes_from_weighted(start, within, |_, _| 0.0)
-    }
-
-    /// As [`Self::routes_from`], but each step into a cell `(x, row)` costs `extra(x, row)` more -
-    /// danger, say: ground an enemy can see, which a route then goes round if it is not too far.
-    /// `extra` is never below 0.
-    pub fn routes_from_weighted(
-        &self,
-        start: (usize, usize),
-        within: f32,
-        extra: impl Fn(usize, usize) -> f32,
-    ) -> Routes {
-        if within.is_finite() {
-            return self.routes_within(start, within, extra);
-        }
-        let (mut costs, mut previous) = (vec![None; self.cells.len()], vec![0; self.cells.len()]);
-        if self.is_walkable(start.0, start.1) {
-            let links = self.links();
-            let first = start.1 * self.width + start.0;
-            costs[first] = Some(0.0);
-            let mut frontier = BinaryHeap::from([Frontier(0.0, first)]);
-            while let Some(Frontier(cost, at)) = frontier.pop() {
-                if costs[at].is_some_and(|best| cost > best) {
-                    continue;
-                }
-                self.each_step(links, at, |there, step, weight| {
-                    let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
-                    if costs[there].is_none_or(|best| next < best) {
-                        costs[there] = Some(next);
-                        previous[there] = at;
-                        frontier.push(Frontier(next, there));
-                    }
-                });
-            }
-        }
-        Routes { width: self.width, reached: Reached::Every { costs, previous } }
-    }
-
-    /// As [`Self::routes_from_weighted`] with a bound: searched over cells kept from one search
-    /// to the next ([`SCRATCH`]), and keeping only those it reached.
-    fn routes_within(&self, start: (usize, usize), within: f32, extra: impl Fn(usize, usize) -> f32) -> Routes {
-        let mut cells = Vec::new();
-        if self.is_walkable(start.0, start.1) {
-            let links = self.links();
-            let first = start.1 * self.width + start.0;
-            SCRATCH.with(|scratch| {
-                let mut scratch = scratch.borrow_mut();
-                scratch.begin(self.cells.len());
-                scratch.reach(first, 0.0, first);
-                let mut touched = vec![first];
-                let mut frontier = BinaryHeap::from([Frontier(0.0, first)]);
-                while let Some(Frontier(cost, at)) = frontier.pop() {
-                    if scratch.cost(at).is_some_and(|best| cost > best) {
-                        continue;
-                    }
-                    if cost > within {
-                        break;
-                    }
-                    self.each_step(links, at, |there, step, weight| {
-                        let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
-                        let best = scratch.cost(there);
-                        if best.is_none_or(|best| next < best) {
-                            if best.is_none() {
-                                touched.push(there);
-                            }
-                            scratch.reach(there, next, at);
-                            frontier.push(Frontier(next, there));
-                        }
-                    });
-                }
-                touched.sort_unstable();
-                cells = touched
-                    .into_iter()
-                    .map(|i| (i, scratch.costs[i], scratch.previous[i] as usize))
-                    .collect();
-            });
-        }
-        Routes { width: self.width, reached: Reached::Some(cells) }
-    }
-
-    /// The cheapest way from `start` to `goal`, both included, as [`Self::routes_from_weighted`]
-    /// would find it - but heading for `goal` (A*), so that only the cells on the way to it are
-    /// searched, not everywhere else as near; and over cells kept from one search to the next,
-    /// not made afresh for each. None if it cannot be reached at a cost of `within` or less.
-    pub fn route_between_weighted(
-        &self,
-        start: (usize, usize),
-        goal: (usize, usize),
-        within: f32,
-        extra: impl Fn(usize, usize) -> f32,
-    ) -> Option<Vec<(usize, usize)>> {
-        if !self.is_walkable(start.0, start.1) || !self.is_walkable(goal.0, goal.1) {
-            return None;
-        }
-        let links = self.links();
-        let (first, last) = (start.1 * self.width + start.0, goal.1 * self.width + goal.0);
-        // The least it could cost from a cell to the goal: across the plan, every step at its
-        // cheapest, along the grid or across a corner. Never more than it does cost, so the way
-        // found is the cheapest.
-        let (gx, gz) = self.plan(goal);
-        let least = |at: usize| {
-            let (x, z) = self.plan((at % self.width, at / self.width));
-            let (dx, dz) = (x.abs_diff(gx) as f32, z.abs_diff(gz) as f32);
-            dx.max(dz) + (std::f32::consts::SQRT_2 - 1.0) * dx.min(dz)
-        };
-        SCRATCH.with(|scratch| {
-            let mut scratch = scratch.borrow_mut();
-            scratch.begin(self.cells.len());
-            scratch.reach(first, 0.0, first);
-            let mut open = BinaryHeap::from([Open(least(first), 0.0, first)]);
-            while let Some(Open(bound, cost, at)) = open.pop() {
-                if scratch.cost(at).is_some_and(|best| cost > best) {
-                    continue;
-                }
-                // Nothing left could get there within its means.
-                if bound > within {
-                    return None;
-                }
-                if at == last {
-                    let mut path = vec![goal];
-                    let mut at = last;
-                    while at != first {
-                        at = scratch.previous[at] as usize;
-                        path.push((at % self.width, at / self.width));
-                    }
-                    path.reverse();
-                    return Some(path);
-                }
-                self.each_step(links, at, |there, step, weight| {
-                    let next = cost + step * (weight + extra(there % self.width, there / self.width).max(0.0));
-                    if scratch.cost(there).is_none_or(|best| next < best) {
-                        scratch.reach(there, next, at);
-                        open.push(Open(next + least(there), next, there));
-                    }
-                });
-            }
-            None
-        })
-    }
-
     /// Every walkable cell, on every storey.
     pub fn walkable_cells(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         (0..self.rows())
@@ -611,31 +279,6 @@ impl WalkGrid {
             .enumerate()
             .filter_map(|(i, d)| d.map(|d| ((i % self.width, i / self.width), d)))
             .max_by_key(|&(_, d)| d)
-    }
-
-    /// Whether there is floor all the way along the straight line from the middle of cell `a` to
-    /// the middle of cell `b` - nothing but floor between them, at about the height the line is
-    /// at there, so that one can be seen from the other, going by the ground alone. Not across a
-    /// floor up above or below.
-    pub fn sees_across(&self, a: (usize, usize), b: (usize, usize)) -> bool {
-        let ((pax, paz), (pbx, pbz)) = (self.plan(a), self.plan(b));
-        let (ha, hb) = (self.floor(a.0, a.1), self.floor(b.0, b.1));
-        let (ax, az) = (pax as f32 + 0.5, paz as f32 + 0.5);
-        let (dx, dz) = (pbx as f32 - pax as f32, pbz as f32 - paz as f32);
-        // A few samples a cell, so that the line cannot slip past the corner of a wall.
-        let samples = ((dx.abs().max(dz.abs())) * 3.0).ceil().max(1.0) as usize;
-        (0..=samples).all(|i| {
-            let t = i as f32 / samples as f32;
-            let (x, z) = ((ax + dx * t).floor(), (az + dz * t).floor());
-            let height = ha + (hb - ha) * t;
-            x >= 0.0
-                && z >= 0.0
-                && (x as usize) < self.width
-                && (z as usize) < self.depth
-                && self
-                    .cells_over((x as usize, z as usize))
-                    .any(|(cx, cz)| (self.floor(cx, cz) - height).abs() <= LEVEL)
-        })
     }
 
     /// The middle of cell `(x, row)` in the world, at height 0, with the grid's corner at `origin`.
@@ -794,58 +437,6 @@ mod tests {
         assert_eq!(mended, afresh);
     }
 
-    #[test]
-    fn routes_within_a_bound_are_those_of_a_search_with_none_as_far_as_they_go() {
-        // A room with a wall across it but for a gap, and a corner kept dear: the bounded search,
-        // over the cells kept from one to the next, finds each cell it reaches at the cost, and by
-        // the way, that the search of every cell does - and twice running, the same.
-        let mut grid = WalkGrid::new(30, 20, 1.0);
-        for z in 0..20 {
-            for x in 0..30 {
-                grid.set(x, z, x != 15 || z == 3);
-            }
-        }
-        let dear = |x: usize, z: usize| if x > 20 && z > 10 { 5.0 } else { 0.0 };
-        let every = grid.routes_from_weighted((2, 10), f32::INFINITY, dear);
-        for _ in 0..2 {
-            let within = grid.routes_from_weighted((2, 10), 25.0, dear);
-            let reached: Vec<(usize, f32)> = within.reached().collect();
-            assert!(reached.windows(2).all(|pair| pair[0].0 < pair[1].0), "in the order of their indices");
-            assert!(reached.len() > 100 && reached.len() < 20 * 30, "{} reached", reached.len());
-            for &(index, cost) in &reached {
-                assert_eq!(every.cost(index), Some(cost), "cell {index}");
-            }
-            for (index, cost) in every.reached().filter(|&(_, cost)| cost <= 25.0) {
-                assert_eq!(within.cost(index), Some(cost), "cell {index} within the bound");
-                let cell = (index % 30, index / 30);
-                assert_eq!(within.path_to(cell), every.path_to(cell), "the way to {cell:?}");
-            }
-            assert_eq!(within.cost(19 * 30 + 29), None, "the far corner, out of reach");
-        }
-    }
-
-    #[test]
-    fn a_weighted_route_goes_round_the_dear_ground_if_it_can() {
-        // An open room, 11 by 11: straight across the middle is cheapest, until the middle
-        // column is made dear everywhere but at the top row.
-        let mut grid = WalkGrid::new(11, 11, 1.0);
-        for z in 0..11 {
-            for x in 0..11 {
-                grid.set(x, z, true);
-            }
-        }
-        let (from, to) = ((0, 5), (10, 5));
-        let plain = grid.routes_from(from, f32::INFINITY).path_to(to).unwrap();
-        assert!(plain.iter().all(|&(_, z)| (4..=6).contains(&z)), "straight across: {plain:?}");
-        let dear = |x: usize, z: usize| if x == 5 && z != 0 { 50.0 } else { 0.0 };
-        let round = grid.routes_from_weighted(from, f32::INFINITY, dear).path_to(to).unwrap();
-        let crossing = round.iter().find(|&&(x, _)| x == 5).unwrap();
-        assert_eq!(crossing.1, 0, "over the top: {round:?}");
-        // With nothing dear, the same as the plain routes.
-        let same = grid.routes_from_weighted(from, f32::INFINITY, |_, _| 0.0).path_to(to).unwrap();
-        assert_eq!(same, plain);
-    }
-
 
     /// Builds a grid from rows of `#` (wall) and `.` (floor).
     fn grid(rows: &[&str]) -> WalkGrid {
@@ -870,94 +461,6 @@ mod tests {
         assert_eq!(distances[2], Some(6));
         assert_eq!(distances[1], None);
         assert_eq!(maze.farthest_from((0, 0)), Some(((4, 2), 10)));
-    }
-
-    #[test]
-    fn a_route_goes_round_walls_and_keeps_off_them() {
-        let maze = grid(&[
-            ".......", //
-            ".......", //
-            ".......", //
-            "#####..", //
-            ".......", //
-        ]);
-        let path = maze
-            .routes_from((0, 1), f32::INFINITY)
-            .path_to((0, 4))
-            .unwrap();
-        assert_eq!(path.first(), Some(&(0, 1)));
-        assert_eq!(path.last(), Some(&(0, 4)));
-        // Every step goes to a neighbour, and only ever onto floor.
-        for pair in path.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            assert!(
-                a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1,
-                "{a:?} to {b:?}"
-            );
-            assert!(maze.is_walkable(b.0, b.1));
-        }
-        // Round the end of the wall, and along the middle row rather than hugging the wall.
-        assert!(path.iter().any(|&(x, _)| x >= 5));
-        assert!(path.contains(&(2, 1)) || path.contains(&(3, 1)));
-    }
-
-    #[test]
-    fn a_route_climbs_the_stairs_and_not_the_ledge() {
-        // A floor 1 m up along the top row, reached by the stairs at the right-hand end.
-        let mut maze = grid(&[
-            ".....", //
-            ".....", //
-        ]);
-        for x in 0..5 {
-            maze.set_floor(x, 0, 1.0);
-        }
-        for (z, height) in [(0, 1.0), (1, 0.5)] {
-            maze.set_floor(4, z, height);
-        }
-        assert!(!maze.can_step((0, 1), (0, 0)), "a 1 m ledge is no step");
-        assert!(maze.can_step((4, 1), (4, 0)), "half a meter is");
-        let path = maze.routes_from((0, 1), f32::INFINITY).path_to((0, 0)).unwrap();
-        assert!(path.contains(&(4, 1)), "round by the stairs: {path:?}");
-        for pair in path.windows(2) {
-            assert!(maze.can_step(pair[0], pair[1]), "{:?} to {:?}", pair[0], pair[1]);
-        }
-        assert_eq!(maze.distances_from((0, 1))[0], Some(9), "along, up and back");
-    }
-
-    #[test]
-    fn a_route_never_cuts_a_corner() {
-        let maze = grid(&[
-            "..", //
-            "#.", //
-        ]);
-        let path = maze
-            .routes_from((0, 0), f32::INFINITY)
-            .path_to((1, 1))
-            .unwrap();
-        assert_eq!(path, [(0, 0), (1, 0), (1, 1)]);
-    }
-
-    #[test]
-    fn there_is_no_route_to_where_cannot_be_reached() {
-        let maze = grid(&[".#."]);
-        assert_eq!(
-            maze.routes_from((0, 0), f32::INFINITY).path_to((2, 0)),
-            None
-        );
-        assert_eq!(
-            maze.routes_from((1, 0), f32::INFINITY).path_to((2, 0)),
-            None
-        );
-    }
-
-    #[test]
-    fn a_search_within_a_cost_reaches_no_further() {
-        let maze = grid(&["......"]);
-        let routes = maze.routes_from((0, 0), 2.5);
-        // The ends of the row are next to the grid's edge, and so dearer: 2 to the first cell,
-        // then 2 more for each after it.
-        assert!(routes.path_to((1, 0)).is_some());
-        assert_eq!(routes.path_to((5, 0)), None);
     }
 
     #[test]
@@ -1002,20 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn a_route_goes_up_the_stairs_to_the_floor_over_the_ground() {
-        let grid = two_storeys();
-        let up = grid.on_storey((0, 0), 1);
-        let path = grid.routes_from((0, 0), f32::INFINITY).path_to(up).expect("a way up");
-        assert!(path.iter().any(|&cell| cell.0 == 9), "by the stairs: {path:?}");
-        for pair in path.windows(2) {
-            assert!(grid.can_step(pair[0], pair[1]), "{:?} to {:?}", pair[0], pair[1]);
-        }
-        // Straight up from under it, there is no step.
-        assert!(!grid.can_step((0, 0), up));
-        assert!(grid.distances_from((0, 0))[up.1 * grid.width + up.0].is_some());
-    }
-
-    #[test]
     fn a_point_is_on_the_storey_at_its_height() {
         let grid = two_storeys();
         let origin = Vector3::zeros();
@@ -1030,15 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn one_floor_is_not_seen_across_from_the_other() {
-        let grid = two_storeys();
-        let (a, b) = ((0, 1), (6, 1));
-        assert!(grid.sees_across(a, b), "along the ground");
-        assert!(grid.sees_across(grid.on_storey(a, 1), grid.on_storey(b, 1)), "along the floor up above");
-        assert!(!grid.sees_across(a, grid.on_storey(b, 1)), "not from one to the other");
-    }
-
-    #[test]
     fn the_nearest_walkable_cell_is_found_without_going_through_them_all() {
         // A big grid with one walkable cell: found near or far.
         let mut grid = WalkGrid::new(400, 400, 0.5);
@@ -1048,83 +528,15 @@ mod tests {
         assert_eq!(grid.nearest_walkable(Vector3::zeros(), Vector3::new(5.0, 0.0, 5.0)), Some((10, 10)));
     }
 
-    /// What following `path` costs, step by step, as the searches reckon it.
-    fn cost_of(grid: &WalkGrid, path: &[(usize, usize)], extra: impl Fn(usize, usize) -> f32) -> f32 {
-        let links = grid.links();
-        path.windows(2)
-            .map(|pair| {
-                let ((ax, az), (bx, bz)) = (grid.plan(pair[0]), grid.plan(pair[1]));
-                let step = if ax != bx && az != bz { std::f32::consts::SQRT_2 } else { 1.0 };
-                let to = pair[1].1 * grid.width + pair[1].0;
-                let weight = if links[to].contains(&0) { EDGE_COST } else { 1.0 };
-                step * (weight + extra(pair[1].0, pair[1].1))
-            })
-            .sum()
-    }
-
-    #[test]
-    fn heading_for_the_goal_finds_as_cheap_a_route_as_searching_everywhere() {
-        // Random walls, some ground dear, and a second storey joined by a stair: A* must find
-        // routes costing what the search of every cell finds, and none where it finds none.
-        let mut rng = Rng::new(3);
-        let (width, depth) = (40, 30);
-        let mut grid = WalkGrid::with_storeys(width, depth, 2, 1.0);
-        for z in 0..depth {
-            for x in 0..width {
-                grid.set(x, z, rng.below(100) >= 28);
-            }
-        }
-        // Upstairs, a floor over the middle, 3 m up, reached by a stair climbing along x.
-        for z in 10..20 {
-            for x in 10..30 {
-                grid.set(x, z + depth, true);
-                grid.set_floor(x, z + depth, 3.0);
-            }
-        }
-        for (step, x) in (4..10).enumerate() {
-            let height = 0.5 * (step + 1) as f32;
-            grid.set(x, 15 + depth, true);
-            grid.set_floor(x, 15 + depth, height);
-            grid.set(x, 15, false);
-        }
-        // Open ground round the stair's foot.
-        for z in 12..19 {
-            for x in 0..4 {
-                grid.set(x, z, true);
-            }
-        }
-        let dear = |x: usize, z: usize| if (x + z).is_multiple_of(7) { 3.0 } else { 0.0 };
-        let cells: Vec<(usize, usize)> = grid.walkable_cells().collect();
-        let mut upstairs = 0;
-        for _ in 0..200 {
-            let (from, to) = (cells[rng.below(cells.len())], cells[rng.below(cells.len())]);
-            let everywhere = grid.routes_from_weighted(from, 60.0, dear);
-            let headed = grid.route_between_weighted(from, to, 60.0, dear);
-            let to_index = to.1 * width + to.0;
-            // The search of every cell also reaches a step past its means; A* keeps within them.
-            match (everywhere.cost(to_index).filter(|&cost| cost <= 60.0), headed) {
-                (Some(cost), Some(path)) => {
-                    assert_eq!((path[0], *path.last().unwrap()), (from, to));
-                    assert!(path.windows(2).all(|p| grid.plan(p[0]).0.abs_diff(grid.plan(p[1]).0) <= 1));
-                    let found = cost_of(&grid, &path, dear);
-                    assert!((found - cost).abs() < 1.0e-3, "{from:?} to {to:?}: {found} against {cost}");
-                    upstairs += usize::from(grid.storey(to) != grid.storey(from));
-                }
-                (None, None) => (),
-                (cost, path) => panic!("{from:?} to {to:?}: {cost:?} against {path:?}"),
-            }
-        }
-        assert!(upstairs > 0, "some routes went up or down the stair");
-    }
-
     #[test]
     fn the_steps_worked_out_once_follow_changes_to_the_grid() {
         let mut maze = grid(&["...", "...", "..."]);
-        assert!(maze.route_between_weighted((0, 1), (2, 1), f32::INFINITY, |_, _| 0.0).is_some());
+        // Cell (2, 1), by `row * width + x`.
+        assert!(maze.distances_from((0, 1))[5].is_some());
         for z in 0..3 {
             maze.set(1, z, false);
         }
-        assert_eq!(maze.route_between_weighted((0, 1), (2, 1), f32::INFINITY, |_, _| 0.0), None);
+        assert_eq!(maze.distances_from((0, 1))[5], None);
         assert_eq!(maze.steps((0, 1)).count(), 2);
     }
 

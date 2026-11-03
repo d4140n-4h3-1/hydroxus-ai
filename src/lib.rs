@@ -66,8 +66,10 @@ pub mod prelude {
         flat, forward, right_of,
         heading_of,
         navigation::{
-            grid::{Routes, Rng, WalkGrid},
-            route::{between, plan, plan_avoiding, route_to, route_to_weighted, spot_near},
+            grid::{Rng, WalkGrid},
+            navmesh::NavMesh,
+            route::between,
+            walk::{plan, plan_avoiding, route_to, route_to_weighted, spot_near},
             steer::{make_way, step_aside},
         },
         perception::{

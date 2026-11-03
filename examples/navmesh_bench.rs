@@ -1,7 +1,7 @@
-//! Times the navmesh against the grid, on a grid dumped by the game: run the game with
-//! MAZE_NAVMESH_STATS=1 MAZE_NAVMESH_DUMP=<file> on a map, then
+//! Times the navmesh on a grid saved as the game once dumped them (width, depth, storeys as u32;
+//! cell size and origin as f32; then each cell's walkable byte and floor), then
 //! `cargo run --release --example navmesh_bench -- <file>`.
-use hydroxus_ai::navigation::{grid::{Rng, WalkGrid}, navmesh::NavMesh, route::route_to};
+use hydroxus_ai::navigation::{grid::{Rng, WalkGrid}, navmesh::NavMesh};
 use nalgebra::Vector3;
 use std::time::Instant;
 
@@ -40,13 +40,6 @@ fn main() {
             pairs.push((a, a + (b - a) * (rng.below(150) as f32 + 20.0) / apart));
         }
     }
-    // Warm the grid's links.
-    let _ = route_to((&grid, origin), pairs[0].0, pairs[0].1, f32::INFINITY);
-    let t = Instant::now();
-    for &(a, b) in &pairs {
-        std::hint::black_box(route_to((&grid, origin), a, b, 200.0 / cell * 3.0));
-    }
-    println!("grid route {:.3} ms", t.elapsed().as_secs_f64() * 5.0);
     let t = Instant::now();
     for &(a, b) in &pairs {
         std::hint::black_box((mesh.nearest(a), mesh.nearest(b)));

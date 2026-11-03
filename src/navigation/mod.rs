@@ -1,11 +1,11 @@
 //! Navigation: getting about - over the walkable ground and up and down its floors, by ferry and
 //! by train, round others in the way, and at the controls of a vehicle.
 //!
-//! - [`grid`]: the level's walkable ground as a grid of cells, and the cheapest ways across it.
-//! - [`navmesh`]: the walkable floor as convex polygons built from the grid, routes over them
-//!   pulled taut, and what can be reached from somewhere.
-//! - [`reach`]: which cells can be got to at all, a bit each.
-//! - [`route`]: routes over that ground, as points on the floor - to somewhere, or a trip away.
+//! - [`grid`]: what a survey of a level finds, as a grid of cells: what the navmesh is made from.
+//! - [`navmesh`]: the walkable floor as convex polygons built from the grid - all that is kept of
+//!   the ground once it is made - routes over them pulled taut, and doors opened and shut on it.
+//! - [`reach`]: which polygons can be got to at all, a bit each.
+//! - [`route`]: picking between bounds; how a route is kept.
 //! - [`wander`]: going about one's business in a city, off the roads and the gangs' turf.
 //! - [`walk`]: getting about over the navmesh - routes, trips, spots near, the floor at a height.
 //! - [`trip`]: getting about over more than one floor, and across by ferry where that is quicker.

@@ -13,7 +13,7 @@
 //!
 //! Once built, the grid can go: everything a route needs is here.
 
-use crate::navigation::grid::WalkGrid;
+use crate::navigation::grid::{WalkGrid, MAX_CLIMB};
 use nalgebra::Vector3;
 use std::{
     cmp::Ordering,
@@ -81,6 +81,14 @@ pub struct NavMesh {
     blocked: Vec<bool>,
     /// How many of `portals` no polygon has any more, since it was made afresh.
     garbage: usize,
+    /// How many floors over one another its plan has room for.
+    storeys: usize,
+    /// The cells shut - a door closed, a firewall down - each with the floor and area it has
+    /// open, by `row * width + x`, the row counting down every storey in turn.
+    closed: HashMap<usize, (f32, u8)>,
+    /// The cells opened or shut since it last caught up (see [`NavMesh::sync`]): open, with their
+    /// floor and area, or shut.
+    pending: HashMap<usize, Option<(f32, u8)>>,
 }
 
 /// A side of a polygon: the cells along it inside, and the step out across it.
@@ -120,10 +128,13 @@ fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-/// The walkable cells of `grid` within `[x0, z0, x1, z1)` of the plan, on every storey, merged
-/// into rectangles each on one storey, its floor level to within [`FLAT`], and all of one `area`
-/// - but those `kept(storey, x, z)` by others already.
-fn merge(grid: &WalkGrid, area: &dyn Fn(usize, usize) -> u8, [bx0, bz0, bx1, bz1]: [usize; 4], kept: &dyn Fn(usize, usize, usize) -> bool) -> Vec<Polygon> {
+/// What there is in a cell, by storey and plan: its floor and area, if it can be walked.
+type Source<'a> = &'a dyn Fn(usize, usize, usize) -> Option<(f32, u8)>;
+
+/// The walkable cells `cell` says there are within `[x0, z0, x1, z1)` of the plan, on each of
+/// `storeys`, merged into rectangles each on one storey, its floor level to within [`FLAT`], and
+/// all of one area - but those `kept(storey, x, z)` by others already.
+fn merge(cell: Source, storeys: usize, [bx0, bz0, bx1, bz1]: [usize; 4], kept: &dyn Fn(usize, usize, usize) -> bool) -> Vec<Polygon> {
     let (w, d) = (bx1 - bx0, bz1 - bz0);
     let mut polygons = Vec::new();
     let mut taken = vec![0u64; (w * d).div_ceil(64)];
@@ -131,22 +142,20 @@ fn merge(grid: &WalkGrid, area: &dyn Fn(usize, usize) -> u8, [bx0, bz0, bx1, bz1
         let i = (z - bz0) * w + (x - bx0);
         taken[i / 64] & (1 << (i % 64)) != 0
     };
-    for storey in 0..grid.storeys {
+    for storey in 0..storeys {
         taken.iter_mut().for_each(|bits| *bits = 0);
         for z in bz0..bz1 {
             for x in bx0..bx1 {
-                let row = z + storey * grid.depth;
-                if !grid.is_walkable(x, row) || is_taken(&taken, x, z) || kept(storey, x, z) {
+                if is_taken(&taken, x, z) || kept(storey, x, z) {
                     continue;
                 }
-                let (floor, kind) = (grid.floor(x, row), area(x, row));
+                let Some((floor, kind)) = cell(storey, x, z) else {
+                    continue;
+                };
                 let fits = |taken: &[u64], cx: usize, cz: usize| {
-                    let row = cz + storey * grid.depth;
-                    grid.is_walkable(cx, row)
-                        && !is_taken(taken, cx, cz)
-                        && (grid.floor(cx, row) - floor).abs() <= FLAT
-                        && area(cx, row) == kind
+                    !is_taken(taken, cx, cz)
                         && !kept(storey, cx, cz)
+                        && cell(storey, cx, cz).is_some_and(|(f, k)| (f - floor).abs() <= FLAT && k == kind)
                 };
                 let mut x1 = x + 1;
                 while x1 < bx1 && x1 - x < MOST_CELLS && fits(&taken, x1, z) {
@@ -190,7 +199,11 @@ impl NavMesh {
     /// [`NavMesh::build`], not generic (see [`NavMesh::route_by`]).
     fn build_by(grid: &WalkGrid, origin: Vector3<f32>, area: &dyn Fn(usize, usize) -> u8) -> Self {
         let (width, depth) = (grid.width, grid.depth);
-        let polygons = merge(grid, area, [0, 0, width, depth], &|_, _, _| false);
+        let cell = |storey: usize, x: usize, z: usize| {
+            let row = z + storey * depth;
+            grid.is_walkable(x, row).then(|| (grid.floor(x, row), area(x, row)))
+        };
+        let polygons = merge(&cell, grid.storeys, [0, 0, width, depth], &|_, _, _| false);
         let mut mesh = Self {
             origin,
             cell_size: grid.cell_size,
@@ -201,12 +214,15 @@ impl NavMesh {
             portals: Vec::new(),
             buckets: vec![Vec::new(); width.div_ceil(BUCKET) * depth.div_ceil(BUCKET)],
             garbage: 0,
+            storeys: grid.storeys,
+            closed: HashMap::new(),
+            pending: HashMap::new(),
         };
         for n in 0..mesh.polygons.len() {
             mesh.index(n as Poly);
         }
         for n in 0..mesh.polygons.len() as Poly {
-            mesh.relink(grid, n);
+            mesh.relink(n);
         }
         mesh
     }
@@ -235,11 +251,12 @@ impl NavMesh {
         }
     }
 
-    /// Works polygon `n`'s portals out afresh, from `grid`: along each edge of it, cell by cell,
-    /// wherever the grid steps across into another polygon, a stretch for each polygon it steps
+    /// Works polygon `n`'s portals out afresh: along each edge of it, cell by cell, wherever a
+    /// step can be taken across into another polygon - over the next cell, its floor a stair's
+    /// step up or down at most, the nearest if more than one is - a stretch for each it steps
     /// into. Its old ones, if any, are left as garbage, cleared out once there is enough of it.
-    fn relink(&mut self, grid: &WalkGrid, n: Poly) {
-        let portals = self.portals_of(grid, n);
+    fn relink(&mut self, n: Poly) {
+        let portals = self.portals_of(n);
         let p = &mut self.polygons[n as usize];
         self.garbage += p.count as usize;
         p.first = self.portals.len() as u32;
@@ -247,7 +264,7 @@ impl NavMesh {
         self.portals.extend(portals);
     }
 
-    fn portals_of(&self, grid: &WalkGrid, n: Poly) -> Vec<Portal> {
+    fn portals_of(&self, n: Poly) -> Vec<Portal> {
         let cs = self.cell_size;
         let (ox, oz) = (self.origin.x, self.origin.z);
         let mut portals = Vec::new();
@@ -255,7 +272,6 @@ impl NavMesh {
         if p.x0 == p.x1 {
             return portals;
         }
-        let row_of = |z: u32| z as usize + p.storey as usize * self.depth;
         // Each side: the cells along it inside, and the step out across it.
         let sides: [Side; 4] = [
             ((p.z0..p.z1).map(|z| (p.x1 - 1, z)).collect(), (1, 0)),
@@ -266,9 +282,10 @@ impl NavMesh {
         for (cells, (dx, dz)) in sides {
             let mut run: Option<(Poly, [f32; 2], [f32; 2])> = None;
             for (x, z) in cells {
-                let to = grid
-                    .step_to((x as usize, row_of(z)), dx, dz)
-                    .and_then(|(tx, trow)| self.over(grid.plan((tx, trow)), grid.storey((tx, trow))));
+                let to = (x as usize)
+                    .checked_add_signed(dx)
+                    .zip((z as usize).checked_add_signed(dz))
+                    .and_then(|plan| self.step_onto(plan, p.floor, n));
                 // This cell's stretch of the edge.
                 let (a, b) = match (dx, dz) {
                     (1, _) => ([ox + (x + 1) as f32 * cs, oz + z as f32 * cs], [ox + (x + 1) as f32 * cs, oz + (z + 1) as f32 * cs]),
@@ -293,23 +310,80 @@ impl NavMesh {
         portals
     }
 
-    /// Catches up with the cells of `grid` changed since it was built, or last caught up - as a
-    /// door opens or shuts, say (see [`WalkGrid::track_changes`]): the polygons over or next to
-    /// them made afresh, of cells of the `area`s `area` says, as [`NavMesh::build`] made them, and
-    /// joined to those round them; the rest left as they are. Whether anything changed. Polygons
-    /// made afresh are new numbers; those they replace are left empty.
-    pub fn sync(&mut self, grid: &mut WalkGrid, area: impl Fn(usize, usize) -> u8) -> bool {
-        let changes = grid.take_changes();
-        if changes.is_empty() {
+    /// The polygon a step from a floor at `floor` - polygon `from`'s - lands on over cell `plan` of
+    /// the plan: of those over it, the one whose floor is nearest, if it is a stair's step up or
+    /// down at most.
+    fn step_onto(&self, (x, z): (usize, usize), floor: f32, from: Poly) -> Option<Poly> {
+        if x >= self.width || z >= self.depth {
+            return None;
+        }
+        self.buckets[(z / BUCKET) * self.width.div_ceil(BUCKET) + x / BUCKET]
+            .iter()
+            .copied()
+            .filter(|&m| m != from)
+            .filter(|&m| {
+                let q = &self.polygons[m as usize];
+                (q.x0..q.x1).contains(&(x as u32)) && (q.z0..q.z1).contains(&(z as u32)) && (q.floor - floor).abs() <= MAX_CLIMB
+            })
+            .min_by(|&a, &b| (self.polygons[a as usize].floor - floor).abs().total_cmp(&(self.polygons[b as usize].floor - floor).abs()))
+    }
+
+    /// The cell `at` is in, as `(x, row)` - the row counting down every storey in turn - on the
+    /// floor nearest its height, within a storey's height: none off the floor.
+    pub fn cell_at(&self, at: Vector3<f32>) -> Option<(usize, usize)> {
+        let n = self.poly_at(at)?;
+        let x = ((at.x - self.origin.x) / self.cell_size).floor() as usize;
+        let z = ((at.z - self.origin.z) / self.cell_size).floor() as usize;
+        Some((x, z + self.polygons[n as usize].storey as usize * self.depth))
+    }
+
+    /// Opens `cells` - each `(x, row)`, as [`NavMesh::cell_at`] has them - or shuts them: a door, a
+    /// barrier, a firewall. One shut can be opened again as it was; one that never was floor
+    /// cannot be. It catches up with them all at once, as [`NavMesh::sync`] is next called.
+    pub fn set_walkable(&mut self, cells: &[(usize, usize)], open: bool) {
+        for &(x, row) in cells {
+            let (z, storey) = (row % self.depth, row / self.depth);
+            if x >= self.width || storey >= self.storeys {
+                continue;
+            }
+            let index = row * self.width + x;
+            match open {
+                true => {
+                    if let Some(was) = self.closed.remove(&index) {
+                        self.pending.insert(index, Some(was));
+                    }
+                }
+                false => {
+                    let here = match self.pending.get(&index) {
+                        Some(&pending) => pending,
+                        None => self.over((x, z), storey).map(|n| (self.polygons[n as usize].floor, self.polygons[n as usize].area)),
+                    };
+                    if let Some(was) = here {
+                        self.closed.insert(index, was);
+                        self.pending.insert(index, None);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Catches up with the cells opened and shut since it was built, or last caught up (see
+    /// [`NavMesh::set_walkable`]): the polygons over or next to them made afresh, as
+    /// [`NavMesh::build`] made them, and joined to those round them; the rest left as they are.
+    /// Whether anything changed. Polygons made afresh are new numbers; those they replace are
+    /// left empty.
+    pub fn sync(&mut self) -> bool {
+        if self.pending.is_empty() {
             return false;
         }
-        self.sync_by(grid, &changes, &area);
+        let pending = std::mem::take(&mut self.pending);
+        self.sync_by(&pending);
         true
     }
 
-    fn sync_by(&mut self, grid: &WalkGrid, changes: &[(usize, usize)], area: &dyn Fn(usize, usize) -> u8) {
+    fn sync_by(&mut self, changes: &HashMap<usize, Option<(f32, u8)>>) {
         // The changed cells on the plan, and a cell round, on every storey.
-        let plan: Vec<(usize, usize)> = changes.iter().map(|&cell| grid.plan(cell)).collect();
+        let plan: Vec<(usize, usize)> = changes.keys().map(|&index| (index % self.width, (index / self.width) % self.depth)).collect();
         let mut bounds = [
             plan.iter().map(|c| c.0).min().unwrap_or(0).saturating_sub(1),
             plan.iter().map(|c| c.1).min().unwrap_or(0).saturating_sub(1),
@@ -337,6 +411,22 @@ impl NavMesh {
                 p.storey as usize == storey && (p.x0..p.x1).contains(&(x as u32)) && (p.z0..p.z1).contains(&(z as u32))
             })
         };
+        // What is in each cell of it, before anything is made afresh: as the polygons over it have
+        // it, but as it has changed.
+        let (w, d) = (bounds[2] - bounds[0], bounds[3] - bounds[1]);
+        let mut cells: Vec<Option<(f32, u8)>> = vec![None; self.storeys * w * d];
+        for storey in 0..self.storeys {
+            for z in bounds[1]..bounds[3] {
+                for x in bounds[0]..bounds[2] {
+                    let index = (z + storey * self.depth) * self.width + x;
+                    cells[(storey * d + (z - bounds[1])) * w + (x - bounds[0])] = match changes.get(&index) {
+                        Some(&changed) => changed,
+                        None => self.over((x, z), storey).map(|n| (self.polygons[n as usize].floor, self.polygons[n as usize].area)),
+                    };
+                }
+            }
+        }
+        let cell = |storey: usize, x: usize, z: usize| cells[(storey * d + (z - bounds[1])) * w + (x - bounds[0])];
         // Their neighbours, whose portals lead into them.
         let mut neighbours: Vec<Poly> = gone.iter().flat_map(|&n| self.portals(n).iter().map(|p| p.to)).filter(|m| !gone.contains(m)).collect();
         for &n in &gone {
@@ -345,7 +435,7 @@ impl NavMesh {
             self.garbage += p.count as usize;
             *p = Polygon { x1: p.x0, z1: p.z0, count: 0, ..*p };
         }
-        let made = merge(grid, area, bounds, &kept);
+        let made = merge(&cell, self.storeys, bounds, &kept);
         let first = self.polygons.len() as Poly;
         for polygon in made {
             self.polygons.push(polygon);
@@ -354,14 +444,14 @@ impl NavMesh {
         }
         let fresh: Vec<Poly> = (first..self.polygons.len() as Poly).collect();
         for &n in &fresh {
-            self.relink(grid, n);
+            self.relink(n);
         }
         // And any that now border the new ones.
         neighbours.extend(fresh.iter().flat_map(|&n| self.portals(n).iter().map(|p| p.to)).filter(|&m| m < first));
         neighbours.sort_unstable();
         neighbours.dedup();
         for n in neighbours {
-            self.relink(grid, n);
+            self.relink(n);
         }
         if self.garbage > self.portals.len() / 2 {
             self.sweep();
@@ -758,6 +848,118 @@ impl NavMesh {
         (self.origin, self.origin + far)
     }
 
+    /// How many cells across and down its plan is, and how many floors over one another it has
+    /// room for: its cells are `(x, row)`, the row counting down every storey in turn.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    pub fn storeys(&self) -> usize {
+        self.storeys
+    }
+
+    /// Whether cell `(x, row)` is floor that can be walked.
+    pub fn is_walkable(&self, x: usize, row: usize) -> bool {
+        self.depth > 0 && self.over((x, row % self.depth), row / self.depth).is_some()
+    }
+
+    /// How high the floor is in cell `(x, row)` over the origin, if it is floor.
+    pub fn floor(&self, x: usize, row: usize) -> f32 {
+        self.over((x, row % self.depth), row / self.depth).map_or(0.0, |n| self.polygons[n as usize].floor)
+    }
+
+    /// The middle of cell `(x, row)` in the world, at the origin's height.
+    pub fn center(&self, (x, row): (usize, usize)) -> Vector3<f32> {
+        let z = row % self.depth.max(1);
+        self.origin + Vector3::new((x as f32 + 0.5) * self.cell_size, 0.0, (z as f32 + 0.5) * self.cell_size)
+    }
+
+    /// The middle of cell `(x, row)`, on its floor.
+    pub fn on_floor(&self, (x, row): (usize, usize)) -> Vector3<f32> {
+        self.center((x, row)) + Vector3::new(0.0, self.floor(x, row), 0.0)
+    }
+
+    /// The walkable cells over `(x, z)` of the plan, the ground's first.
+    pub fn cells_over(&self, (x, z): (usize, usize)) -> impl Iterator<Item = (usize, usize)> + '_ {
+        (0..self.storeys).map(move |storey| (x, z + storey * self.depth)).filter(|&(x, row)| self.is_walkable(x, row))
+    }
+
+    /// Every walkable cell.
+    pub fn walkable_cells(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.polygons.iter().filter(|p| p.x0 != p.x1).flat_map(move |p| {
+            (p.z0..p.z1).flat_map(move |z| (p.x0..p.x1).map(move |x| (x as usize, z as usize + p.storey as usize * self.depth)))
+        })
+    }
+
+    /// The walkable cell nearest `point`, a storey's height counting as far as
+    /// [`crate::navigation::grid::STOREY_AWAY`] cells across.
+    pub fn nearest_walkable(&self, point: Vector3<f32>) -> Option<(usize, usize)> {
+        let n = self.nearest(point)?;
+        self.cell_at(self.closest_point(n, point))
+    }
+
+    /// The walkable cell `point` is in, or failing that the nearest one.
+    pub fn walkable_cell(&self, point: Vector3<f32>) -> Option<(usize, usize)> {
+        self.cell_at(point).or_else(|| self.nearest_walkable(point))
+    }
+
+    /// The cells a step along the plan's four ways from cell `from` lands in: onto floor a stair's
+    /// step up or down at most, the nearest if more than one is.
+    pub fn steps(&self, (x, row): (usize, usize)) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let (z, storey) = (row % self.depth.max(1), row / self.depth.max(1));
+        let here = self.over((x, z), storey);
+        [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)].into_iter().filter_map(move |(dx, dz)| {
+            let n = here?;
+            let plan = (x.checked_add_signed(dx)?, z.checked_add_signed(dz)?);
+            let to = match self.over(plan, storey) {
+                Some(same) if same == n || (self.polygons[same as usize].floor - self.polygons[n as usize].floor).abs() <= MAX_CLIMB => same,
+                _ => self.step_onto(plan, self.polygons[n as usize].floor, n)?,
+            };
+            Some((plan.0, plan.1 + self.polygons[to as usize].storey as usize * self.depth))
+        })
+    }
+
+    /// How many steps (see [`NavMesh::steps`]) each cell is from `start`, by `row * width + x`:
+    /// none for those it cannot get to. A cell at a time - for a level's setting out, on a map
+    /// no bigger than a heist's, not a city's.
+    pub fn distances_from(&self, start: (usize, usize)) -> Vec<Option<u32>> {
+        let mut distances = vec![None; self.width * self.depth * self.storeys];
+        if !self.is_walkable(start.0, start.1) {
+            return distances;
+        }
+        let mut queue = std::collections::VecDeque::from([start]);
+        distances[start.1 * self.width + start.0] = Some(0);
+        while let Some(cell) = queue.pop_front() {
+            let d = distances[cell.1 * self.width + cell.0].unwrap_or(0);
+            for next in self.steps(cell) {
+                let i = next.1 * self.width + next.0;
+                if distances[i].is_none() {
+                    distances[i] = Some(d + 1);
+                    queue.push_back(next);
+                }
+            }
+        }
+        distances
+    }
+
+    /// The cell furthest from `start` in steps, and how many.
+    pub fn farthest_from(&self, start: (usize, usize)) -> Option<((usize, usize), u32)> {
+        self.distances_from(start)
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| d.map(|d| ((i % self.width, i / self.width), d)))
+            .max_by_key(|&(_, d)| d)
+    }
+
+    /// How much floor it has, in square meters.
+    pub fn floor_area(&self) -> f32 {
+        (0..self.polygons.len() as Poly).map(|n| self.area_of(n)).sum()
+    }
+
     /// How many polygons there are that have not been made afresh as others.
     pub fn live(&self) -> usize {
         self.polygons.iter().filter(|p| p.x0 != p.x1).count()
@@ -1022,40 +1224,48 @@ mod tests {
 
     #[test]
     fn a_door_opened_and_shut_is_caught_up_with_where_it_is_and_nowhere_else() {
-        // Two rooms with a wall between, and a doorway in it, shut; a floor of its own beyond.
-        let mut grid = grid(80, 20, |x, _| x != 20);
+        // Two rooms with a wall between, and a doorway in it, made open and shut at once; a floor
+        // of its own beyond.
+        let door = [(20, 9), (20, 10)];
+        let open = grid(80, 20, |x, z| x != 20 || door.contains(&(x, z)));
+        let shut = grid(80, 20, |x, _| x != 20);
         let area = |x: usize, _: usize| u8::from(x >= 40);
         let mesh_far = |mesh: &NavMesh| mesh.over_spot(Vector3::new(35.0, 0.0, 5.0))[0];
-        let mut mesh = NavMesh::build(&grid, Vector3::zeros(), area);
+        let mut mesh = NavMesh::build(&open, Vector3::zeros(), area);
         let far = mesh_far(&mesh);
-        grid.track_changes();
+        mesh.set_walkable(&door, false);
+        assert!(mesh.sync());
         let from = Vector3::new(2.0, 0.0, 1.0);
         let to = Vector3::new(18.0, 0.0, 1.0);
         assert!(mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0).is_empty(), "shut");
-        // Opened: two cells of the wall.
-        grid.set(20, 9, true);
-        grid.set(20, 10, true);
-        assert!(mesh.sync(&mut grid, area));
-        let open = mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0);
-        assert!(!open.is_empty(), "open");
-        assert!(open.iter().any(|p| (p.x - 10.0).abs() < 0.6 && (4.4..5.6).contains(&p.z)), "through the doorway: {open:?}");
+        // Opened again.
+        mesh.set_walkable(&door, true);
+        assert!(mesh.sync());
+        let opened = mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0);
+        assert!(opened.iter().any(|p| (p.x - 10.0).abs() < 0.6 && (4.4..5.6).contains(&p.z)), "through the doorway: {opened:?}");
         assert_eq!(mesh_far(&mesh), far, "the far floor left as it was");
         // As a navmesh made from scratch would have it.
-        let fresh = NavMesh::build(&grid, Vector3::zeros(), area);
-        assert_eq!(fresh.route(from, to, f32::INFINITY, 0.25, |_| 0.0), open);
+        let fresh = NavMesh::build(&open, Vector3::zeros(), area);
+        assert_eq!(fresh.route(from, to, f32::INFINITY, 0.25, |_| 0.0), opened);
         // Shut again.
-        grid.set(20, 9, false);
-        grid.set(20, 10, false);
-        assert!(mesh.sync(&mut grid, area));
+        mesh.set_walkable(&door, false);
+        assert!(mesh.sync());
         assert!(mesh.route(from, to, f32::INFINITY, 0.25, |_| 0.0).is_empty(), "shut again");
-        assert!(!mesh.sync(&mut grid, area), "nothing more to catch up with");
+        assert!(!mesh.sync(), "nothing more to catch up with");
+        // A cell that never was floor cannot be opened.
+        mesh.set_walkable(&[(20, 3)], true);
+        assert!(!mesh.sync());
         // Over and over, it stays as small as it should.
         for k in 0..50 {
-            grid.set(20, 9, k % 2 == 0);
-            mesh.sync(&mut grid, area);
+            mesh.set_walkable(&door[..1], k % 2 == 0);
+            mesh.sync();
         }
+        mesh.set_walkable(&door[..1], false);
+        mesh.sync();
         assert!(mesh.portal_count() < 4 * fresh.portal_count() + 64, "{} portals", mesh.portal_count());
-        assert_eq!(mesh.live(), NavMesh::build(&grid, Vector3::zeros(), area).len());
+        assert_eq!(mesh.live(), NavMesh::build(&shut, Vector3::zeros(), area).len());
+        assert_eq!(mesh.cell_at(Vector3::new(10.25, 0.0, 5.25)), None, "shut, no floor");
+        assert_eq!(mesh.cell_at(Vector3::new(1.25, 0.0, 5.25)), Some((2, 10)));
     }
 
     #[test]
@@ -1074,6 +1284,37 @@ mod tests {
         let up = mesh.floor_near(Vector3::new(13.0, 4.2, 5.0), 6.0, 1.0).unwrap();
         assert!(up.x >= 15.0 && up.y == 4.0, "{up:?}");
         assert_eq!(mesh.floor_near(Vector3::new(10.0, 2.0, 5.0), 6.0, 1.0), None, "nothing at that height");
+    }
+
+    #[test]
+    fn its_cells_are_the_grids_and_steps_between_them_as_the_grids() {
+        // A room with a pillar, and stairs up to a landing.
+        let mut grid = WalkGrid::new(20, 10, 0.5);
+        for z in 0..10 {
+            for x in 0..20 {
+                grid.set(x, z, !(5..8).contains(&x) || !(3..6).contains(&z));
+                if x >= 12 {
+                    grid.set_floor(x, z, ((x - 11) as f32 * 0.2).min(1.2));
+                }
+            }
+        }
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
+        for z in 0..10 {
+            for x in 0..20 {
+                assert_eq!(mesh.is_walkable(x, z), grid.is_walkable(x, z), "({x}, {z})");
+                if grid.is_walkable(x, z) {
+                    assert!((mesh.floor(x, z) - grid.floor(x, z)).abs() <= FLAT);
+                }
+            }
+        }
+        assert_eq!(mesh.walkable_cells().count(), grid.walkable_cells().count());
+        assert_eq!(mesh.distances_from((0, 0)), grid.distances_from((0, 0)));
+        assert_eq!(mesh.farthest_from((0, 0)), grid.farthest_from((0, 0)));
+        // In the pillar, the nearest floor beside it.
+        assert!(!mesh.is_walkable(6, 4));
+        let (x, z) = mesh.walkable_cell(Vector3::new(3.25, 0.0, 2.25)).unwrap();
+        assert!(mesh.is_walkable(x, z) && (x as f32 - 6.0).abs() + (z as f32 - 4.0).abs() <= 3.0);
+        assert!((mesh.floor_area() - grid.walkable_cells().count() as f32 * 0.25).abs() < 1e-3);
     }
 }
 
