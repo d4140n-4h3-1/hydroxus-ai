@@ -1,7 +1,7 @@
 //! AI for Hydroxus games: NPCs that get about a level, see what is in front of them, hear what
 //! carries to them, and hunt the player through Metal Gear's alert phases.
 //!
-//! It is in three parts, and a few things besides:
+//! It is in four parts, and its alert phases:
 //!
 //! - [`perception`]: what an NPC takes in - what it sees ([`perception::sight`]), hears
 //!   ([`perception::hearing`]), the bolts it notices flying by ([`perception::bolts`]), and what
@@ -16,11 +16,12 @@
 //!   business in a city ([`navigation::wander`]), over floors and by ferry
 //!   ([`navigation::trip`]), by train ([`navigation::ride`]), making way for others
 //!   ([`navigation::steer`]), and driving ([`navigation::drive`]).
+//! - [`social`]: NPCs among each other - walking about in pairs and groups
+//!   ([`social::group`]), meeting and talking and being talked to ([`social::talk`]), telling a
+//!   sentry of trouble and sounding the alarm ([`social::report`]), and a city's crowd
+//!   ([`social::crowd`]).
 //! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next,
 //!   which what an NPC perceives and what it does both turn on.
-//! - [`group`]: walking about together, a pair or a group about the one leading it.
-//! - [`crowd`]: a city's crowd, always about the player, turning up again out of sight.
-//! - [`talk`]: who the player can talk to.
 //!
 //! The crate never touches a scene. The game casts the rays that say whether anything is in the
 //! way, moves the nodes and plays the animations; this decides what an NPC makes of what is
@@ -29,12 +30,10 @@
 //! Directions along the ground are headings, in radians, left positive from the world's +z.
 
 pub mod alert;
-pub mod crowd;
-pub mod group;
 pub mod navigation;
 pub mod perception;
+pub mod social;
 pub mod tactics;
-pub mod talk;
 
 pub use nalgebra;
 

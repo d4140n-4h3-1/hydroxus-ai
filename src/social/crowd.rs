@@ -5,7 +5,7 @@
 
 use crate::{
     flat, forward,
-    group::about_leader,
+    social::group::about_leader,
     navigation::{
         grid::{Rng, WalkGrid},
         route::between,
@@ -51,7 +51,7 @@ impl Crowd {
     /// Somewhere on the floor of `grid` whose corner is at `origin` that one of the crowd could
     /// have walked to, a little way off the `player`'s feet, where `hidden` says the player cannot
     /// see it turn up; and for a group, room for the rest about it, keeping to `slots` of
-    /// [`crate::group::ABOUT_LEADER`]: where, which way it faces, and where the rest are.
+    /// [`crate::social::group::ABOUT_LEADER`]: where, which way it faces, and where the rest are.
     #[allow(clippy::type_complexity)]
     pub fn spot(
         &self,

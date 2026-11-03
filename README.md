@@ -9,7 +9,7 @@ It knows nothing of the engine but its vectors (nalgebra's, which the engine re-
 casts the rays that say whether anything is in the way, moves the nodes and plays the animations;
 this decides what an NPC makes of what is round it.
 
-It is in three folders, and a few things besides.
+It is in four folders, and its alert phases besides.
 
 ### `perception` - what an NPC takes in
 
@@ -47,14 +47,20 @@ It is in three folders, and a few things besides.
 | `steer` | Making way in a corridor: veering right round someone ahead, stopping only for someone right in front, stepping aside for someone coming. |
 | `drive` | Riding a vehicle round a course of checkpoints - flat out on the straights, easing into the turns, over the speed pads - pulling out round one ahead; and in traffic, stopping short of whoever is in the way, and for an amber light if it can. |
 
+### `social` - NPCs among each other
+
+| Module | What it does |
+|--------|--------------|
+| `group` | Walking about together: a pair one beside the other, a group fanned out behind the one leading it; who is in which, who speaks for it, who leads it on when the one leading it is gone, and waiting for one kept talking or fallen behind. |
+| `talk` | Who the player can talk to - close by and in front of them, nearest first; two going about by themselves that meet and stop to talk; a group talking among itself near the player; and how far off what they call out is heard. |
+| `report` | A witness going to tell the nearest sentry of what it saw, or hiding with none about till it gives up; and who hears an alarm. |
+| `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight. |
+
 ### Besides
 
 | Module | What it does |
 |--------|--------------|
 | `alert` | Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next. What an NPC perceives and what it does both turn on it. |
-| `group` | Walking about together: a pair one beside the other, a group fanned out behind the one leading it. |
-| `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight. |
-| `talk` | Who the player can talk to: close by and in front of them, nearest first. |
 
 ```toml
 [dependencies]
