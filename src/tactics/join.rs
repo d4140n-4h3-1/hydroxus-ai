@@ -5,7 +5,7 @@
 
 use crate::{
     alert::Alert,
-    sight::{Sight, Stance},
+    perception::sight::{Sight, Stance},
 };
 use nalgebra::Vector3;
 

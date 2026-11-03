@@ -12,8 +12,8 @@
 //! rides it across, gets off at the other end while it waits there, and walks on (see [`Trip`]).
 
 use crate::{
-    grid::{WalkGrid, MAX_CLIMB},
-    route::route_to,
+    navigation::grid::{WalkGrid, MAX_CLIMB},
+    navigation::route::route_to,
 };
 use nalgebra::Vector3;
 

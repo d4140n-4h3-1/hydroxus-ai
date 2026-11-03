@@ -1,7 +1,7 @@
 //! How far a noise carries: along the corridors, round the corners, not through the walls. A
 //! noise that carries `loudness` meters is heard by anyone that far along the floor from it.
 
-use crate::grid::{Routes, WalkGrid};
+use crate::navigation::grid::{Routes, WalkGrid};
 use nalgebra::Vector3;
 
 /// A noise, and how far along the floor it carries.

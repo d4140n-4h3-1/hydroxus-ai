@@ -1,7 +1,7 @@
 //! Pacing a chase: breaking into a sprint now and then, never at the start, and - for one with
 //! breath to keep - easing off before it runs out, keeping some back for a last burst.
 
-use crate::{grid::Rng, route::between};
+use crate::{navigation::grid::Rng, navigation::route::between};
 
 /// How long, in seconds, an NPC on Alert runs before it breaks into a sprint, from least to
 /// most - picked afresh each time, so the player cannot count on when - and how long each sprint

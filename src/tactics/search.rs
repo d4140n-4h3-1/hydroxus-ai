@@ -12,7 +12,7 @@
 //! Compared with each searcher wandering off to somewhere at random, it finds a player who has
 //! run off and hidden far more often: see the test at the bottom.
 
-use crate::grid::{WalkGrid, LEVEL};
+use crate::navigation::grid::{WalkGrid, LEVEL};
 
 /// How much of its chance a cell keeps each step it spreads, the rest going to its neighbours.
 const KEEP: f32 = 0.2;
@@ -285,8 +285,8 @@ impl SearchMap {
 mod tests {
     use super::*;
     use crate::{
-        grid::Rng,
-        route::{between, plan, route_to},
+        navigation::grid::Rng,
+        navigation::route::{between, plan, route_to},
     };
     use nalgebra::Vector3;
 

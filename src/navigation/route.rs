@@ -3,7 +3,7 @@
 //! A route is kept the way an NPC follows it: the first point last, so that the next one to make
 //! for is `route.last()`, and reaching it is `route.pop()`.
 
-use crate::grid::{Rng, WalkGrid};
+use crate::navigation::grid::{Rng, WalkGrid};
 use nalgebra::Vector3;
 
 /// A number from `range.0` to `range.1`.
@@ -171,6 +171,34 @@ pub fn spot_on_any_floor_near(
     grid.nearest_walkable(origin, at).map(|cell| grid.on_floor(origin, cell))
 }
 
+/// How many cells a grid has to have for a spot well away from somewhere to be picked at random
+/// (see [`far_cell`]) rather than from routes to everywhere: a city's, whose millions of cells
+/// took seconds to work out the walk to.
+pub const BIG_GRID: usize = 4_000_000;
+/// How many random cells are tried for one, before the game works out routes after all.
+const FAR_TRIES: usize = 2000;
+
+/// On a big grid (see [`BIG_GRID`]), a walkable cell at least `away` cells from `start` as the
+/// crow flies, picked at random by `rng`, as an index into `grid`; none on a small one, or if none
+/// turns up. Every walkable cell of a surveyed grid can be walked to, the survey having found it
+/// by walking.
+pub fn far_cell(grid: &WalkGrid, start: (usize, usize), away: f32, rng: &mut Rng) -> Option<usize> {
+    if grid.width * grid.rows() < BIG_GRID {
+        return None;
+    }
+    let (sx, sz) = grid.plan(start);
+    for _ in 0..FAR_TRIES {
+        let (x, z) = (rng.below(grid.width), rng.below(grid.depth));
+        let over: Vec<(usize, usize)> = grid.cells_over((x, z)).collect();
+        if over.is_empty() || (x as f32 - sx as f32).hypot(z as f32 - sz as f32) < away {
+            continue;
+        }
+        let (cx, row) = over[rng.below(over.len())];
+        return Some(row * grid.width + cx);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +246,21 @@ mod tests {
     fn between_stays_between() {
         let mut rng = Rng::new(9);
         assert!((0..1000).map(|_| between(&mut rng, (2.0, 3.0))).all(|n| (2.0..=3.0).contains(&n)));
+    }
+
+    #[test]
+    fn a_far_cell_is_picked_at_random_only_on_a_big_grid_and_well_away() {
+        let mut rng = Rng::new(9);
+        let small = WalkGrid::new(100, 100, 1.0);
+        assert_eq!(far_cell(&small, (0, 0), 10.0, &mut rng), None);
+        let mut big = WalkGrid::new(2000, 2000, 1.0);
+        for z in 0..2000 {
+            big.set(z % 2000, z, true);
+        }
+        for _ in 0..20 {
+            let Some(cell) = far_cell(&big, (0, 0), 300.0, &mut rng) else { continue };
+            let (x, z) = (cell % big.width, cell / big.width);
+            assert!(big.is_walkable(x, z) && (x as f32).hypot(z as f32) >= 300.0);
+        }
     }
 }

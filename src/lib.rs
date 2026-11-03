@@ -1,20 +1,26 @@
-//! Stealth AI for Hydroxus games: NPCs that walk a level, see what is in front of them, hear
-//! what carries to them, and hunt the player through Metal Gear's alert phases.
+//! AI for Hydroxus games: NPCs that get about a level, see what is in front of them, hear what
+//! carries to them, and hunt the player through Metal Gear's alert phases.
 //!
-//! - [`grid`]: the level's walkable ground as a grid of cells, and the cheapest ways across it.
-//! - [`route`]: routes over that ground, as points on the floor - to somewhere, or a trip away.
-//! - [`sight`]: what an NPC can see. It sees clearly in front of it, and near out of the corner
-//!   of its eye, whatever it is doing - but nothing behind it, on Alert too, and right behind it
-//!   too - so it can be crept up on from behind, or slipped round.
-//! - [`hearing`]: how far a noise carries, along the corridors rather than through the walls.
-//! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next.
-//! - [`steer`]: making way for others in a corridor, walking or standing about.
-//! - [`search`]: where someone lost from sight could be by now, and who looks where for them.
-//! - [`trip`]: getting about over more than one floor, and across by ferry where that is quicker.
-//! - [`join`]: one of a kind that hunts joining in a chase it sees another of its kind in.
-//! - [`pace`]: sprinting now and then in a chase, and keeping breath for a last burst.
-//! - [`threat`]: a weapon pointed at an NPC: its warnings, then its doing something about it.
+//! It is in three parts, and a few things besides:
+//!
+//! - [`perception`]: what an NPC takes in - what it sees ([`perception::sight`]), hears
+//!   ([`perception::hearing`]), the bolts it notices flying by ([`perception::bolts`]), and what
+//!   it can tell of a shooting it saw ([`perception::witness`]).
+//! - [`tactics`]: what it does about it - searching for someone lost ([`tactics::search`]),
+//!   joining a chase ([`tactics::join`]), pacing itself ([`tactics::pace`]), cutting off and
+//!   running ([`tactics::chase`]), answering a weapon pointed at it ([`tactics::threat`]),
+//!   shooting ([`tactics::fire`]) and firing blind ([`tactics::blind`]), and taking cover
+//!   ([`tactics::cover`]); and fighting as a team ([`tactics::team`]).
+//! - [`navigation`]: getting about - the walk grid ([`navigation::grid`]) and what can be got to
+//!   on it ([`navigation::reach`]), routes over it ([`navigation::route`]), going about one's
+//!   business in a city ([`navigation::wander`]), over floors and by ferry
+//!   ([`navigation::trip`]), by train ([`navigation::ride`]), making way for others
+//!   ([`navigation::steer`]), and driving ([`navigation::drive`]).
+//! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next,
+//!   which what an NPC perceives and what it does both turn on.
 //! - [`group`]: walking about together, a pair or a group about the one leading it.
+//! - [`crowd`]: a city's crowd, always about the player, turning up again out of sight.
+//! - [`talk`]: who the player can talk to.
 //!
 //! The crate never touches a scene. The game casts the rays that say whether anything is in the
 //! way, moves the nodes and plays the animations; this decides what an NPC makes of what is
@@ -23,17 +29,12 @@
 //! Directions along the ground are headings, in radians, left positive from the world's +z.
 
 pub mod alert;
-pub mod grid;
+pub mod crowd;
 pub mod group;
-pub mod hearing;
-pub mod join;
-pub mod pace;
-pub mod route;
-pub mod search;
-pub mod sight;
-pub mod steer;
-pub mod threat;
-pub mod trip;
+pub mod navigation;
+pub mod perception;
+pub mod tactics;
+pub mod talk;
 
 pub use nalgebra;
 
@@ -64,13 +65,16 @@ pub mod prelude {
     pub use crate::{
         alert::{Alert, CAUTION, EVASION},
         flat, forward, right_of,
-        grid::{Routes, Rng, WalkGrid},
         heading_of,
-        hearing::Heard,
-        route::{between, plan, plan_avoiding, route_to, route_to_weighted, spot_near},
-        search::SearchMap,
-        sight::{Sight, Stance},
-        steer::{make_way, step_aside},
-        threat::Threat,
+        navigation::{
+            grid::{Routes, Rng, WalkGrid},
+            route::{between, plan, plan_avoiding, route_to, route_to_weighted, spot_near},
+            steer::{make_way, step_aside},
+        },
+        perception::{
+            hearing::Heard,
+            sight::{Sight, Stance},
+        },
+        tactics::{search::SearchMap, threat::Threat},
     };
 }
