@@ -16,16 +16,19 @@
 
 use crate::{
     flat, forward, heading_of,
-    navigation::{grid::WalkGrid, steer},
+    navigation::{
+        navmesh::{NavMesh, Poly},
+        steer,
+    },
 };
 use nalgebra::Vector3;
+use std::collections::HashMap;
 
 /// How long what a team saw of an enemy stays worth acting on, in seconds.
 pub const INTEL_TIME: f32 = 8.0;
-/// How far apart, in grid cells, the team works out which ground its enemies can see, and how
-/// often, in seconds; how dear a route counts each step into ground one enemy can see, in
-/// steps; and how far off an enemy sees that far, in meters.
-pub const EXPOSURE_STEP: usize = 4;
+/// How often the team works out which ground its enemies can see, in seconds; how much dearer a
+/// meter of ground one enemy can see counts, for a route; and how far off an enemy sees that far,
+/// in meters.
 pub const EXPOSURE_EVERY: f32 = 1.0;
 pub const EXPOSURE_COST: f32 = 6.0;
 pub const EXPOSURE_RANGE: f32 = 45.0;
@@ -117,56 +120,50 @@ impl Intel {
     }
 }
 
-/// Which ground a team's enemies can see: for every [`EXPOSURE_STEP`]th cell of the grid each way,
-/// how many of them could see one standing there.
+/// Which ground a team's enemies can see: for every polygon of the navmesh, how many of them could
+/// see one standing in the middle of it.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct Exposure {
-    cols: usize,
-    cells: Vec<u8>,
-}
+pub struct Exposure(HashMap<Poly, u8>);
 
 impl Exposure {
-    /// Works it out over `grid`, whose corner is at `origin`, for enemies standing at `enemies`:
-    /// each that is within [`EXPOSURE_RANGE`] of the chest - `chest` meters over the floor - of
-    /// one standing on a cell, and that `sees` it there from where it stands.
-    pub fn survey(
-        (grid, origin): (&WalkGrid, Vector3<f32>),
-        enemies: &[Vector3<f32>],
-        chest: f32,
-        sees: impl Fn(Vector3<f32>, Vector3<f32>) -> bool,
-    ) -> Self {
-        let (cols, rows) = (grid.width.div_ceil(EXPOSURE_STEP), grid.depth.div_ceil(EXPOSURE_STEP));
-        let mut cells = vec![0u8; cols * rows];
-        for (c, value) in cells.iter_mut().enumerate() {
-            let cell = ((c % cols) * EXPOSURE_STEP, (c / cols) * EXPOSURE_STEP);
-            if !grid.is_walkable(cell.0, cell.1) {
+    /// Works it out over `mesh` for enemies standing at `enemies`: each that is within
+    /// [`EXPOSURE_RANGE`] of the chest - `chest` meters over the floor - of one standing in the
+    /// middle of a polygon, and that `sees` it there from where it stands.
+    pub fn survey(mesh: &NavMesh, enemies: &[Vector3<f32>], chest: f32, sees: impl Fn(Vector3<f32>, Vector3<f32>) -> bool) -> Self {
+        let mut seen = HashMap::new();
+        if enemies.is_empty() {
+            return Self(seen);
+        }
+        for n in 0..mesh.len() as Poly {
+            if mesh.area_of(n) <= 0.0 {
                 continue;
             }
-            let at = grid.on_floor(origin, cell) + Vector3::y() * chest;
+            let at = mesh.centre(n) + Vector3::y() * chest;
             let seeing = enemies
                 .iter()
                 .filter(|&&enemy| (enemy - at).norm() < EXPOSURE_RANGE)
                 .filter(|&&enemy| sees(enemy, at))
                 .count();
-            *value = seeing.min(255) as u8;
+            if seeing > 0 {
+                seen.insert(n, seeing.min(255) as u8);
+            }
         }
-        Self { cols, cells }
+        Self(seen)
     }
 
-    /// Whether it has been worked out at all.
+    /// Whether it has anything in it: any enemies known of, seeing anywhere.
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+        self.0.is_empty()
     }
 
-    /// How many of the enemies can see the cell `(x, z)`, going by its nearest surveyed cell.
-    pub fn at(&self, (x, z): (usize, usize)) -> u8 {
-        let (cx, cz) = ((x + EXPOSURE_STEP / 2) / EXPOSURE_STEP, (z + EXPOSURE_STEP / 2) / EXPOSURE_STEP);
-        self.cells.get(cz * self.cols + cx).copied().unwrap_or(0)
+    /// How many of the enemies can see polygon `n`.
+    pub fn at(&self, n: Poly) -> u8 {
+        self.0.get(&n).copied().unwrap_or(0)
     }
 
-    /// How much dearer a step into cell `(x, z)` is, for a route that keeps out of their sight.
-    pub fn cost(&self, cell: (usize, usize)) -> f32 {
-        self.at(cell) as f32 * EXPOSURE_COST
+    /// How much dearer a meter across polygon `n` is, for a route that keeps out of their sight.
+    pub fn cost(&self, n: Poly) -> f32 {
+        self.at(n) as f32 * EXPOSURE_COST
     }
 }
 
@@ -211,10 +208,10 @@ pub fn cover_worth(rank: f32, seen: usize, crowded: bool) -> f32 {
 
 /// Where one at `me`, going round the `side` (1 or -1) against a `threat`, makes for: off to that
 /// side of the line from the middle of its team, standing at `mates`, to the threat,
-/// [`FLANK_DISTANCE`] from it, on the floor of `grid` whose corner is at `origin`. None if it is
+/// [`FLANK_DISTANCE`] from it, on the floor of `mesh` nearest there. None if it is
 /// close enough already to go straight at them.
 pub fn flank_point(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
+    mesh: &NavMesh,
     me: Vector3<f32>,
     mates: &[Vector3<f32>],
     threat: Vector3<f32>,
@@ -223,22 +220,21 @@ pub fn flank_point(
     let middle = mates.iter().sum::<Vector3<f32>>() / mates.len().max(1) as f32;
     let from_threat = heading_of(middle - threat)?;
     let point = threat + forward(from_threat + side * FLANK_ANGLE) * FLANK_DISTANCE;
-    let cell = grid.nearest_walkable(origin, point)?;
-    let there = grid.on_floor(origin, cell);
+    let there = mesh.nearest(point).map(|n| mesh.closest_point(n, point))?;
     (flat(there - me).norm() > 3.0).then_some(there)
 }
 
 /// Where one at `me`, with no cover to be had from `threat`, steps aside to, across the line from
-/// it, to the `side` (1 or -1): on the floor of `grid` whose corner is at `origin`, if there is any.
+/// it, to the `side` (1 or -1): on the floor of `mesh` there, or nearest it.
 pub fn sidestep_to(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
+    mesh: &NavMesh,
     me: Vector3<f32>,
     threat: Vector3<f32>,
     side: f32,
 ) -> Option<Vector3<f32>> {
     let across = flat(threat - me).try_normalize(1.0e-3).map(steer::right_of)?;
-    let cell = grid.walkable_cell(origin, me + across * side * SIDESTEP)?;
-    Some(grid.on_floor(origin, cell))
+    let to = me + across * side * SIDESTEP;
+    mesh.nearest(to).map(|n| mesh.closest_point(n, to))
 }
 
 /// Whether one at `me` moves on from cover: with a teammate near enough of `mates` - each where it
@@ -282,14 +278,14 @@ impl Stuck {
 mod tests {
     use super::*;
 
-    fn open(size: usize) -> WalkGrid {
-        let mut grid = WalkGrid::new(size, size, 1.0);
+    fn open(size: usize) -> NavMesh {
+        let mut grid = crate::navigation::grid::WalkGrid::new(size, size, 1.0);
         for z in 0..size {
             for x in 0..size {
                 grid.set(x, z, true);
             }
         }
-        grid
+        NavMesh::build(&grid, Vector3::zeros(), |_, _| 0)
     }
 
     #[test]
@@ -322,13 +318,15 @@ mod tests {
 
     #[test]
     fn the_ground_the_enemy_sees_is_dear_to_cross() {
-        let grid = open(40);
+        let mesh = open(40);
         let enemy = Vector3::new(2.0, 1.5, 2.0);
         // It sees only the ground with z under 20.
-        let exposure = Exposure::survey((&grid, Vector3::zeros()), &[enemy], 1.2, |_, at| at.z < 20.0);
-        assert_eq!(exposure.at((4, 4)), 1);
-        assert_eq!(exposure.at((4, 32)), 0);
-        assert_eq!(exposure.cost((4, 4)), EXPOSURE_COST);
+        let exposure = Exposure::survey(&mesh, &[enemy], 1.2, |_, at| at.z < 20.0);
+        let near = mesh.poly_at(Vector3::new(4.5, 0.0, 4.5)).unwrap();
+        let far = mesh.poly_at(Vector3::new(4.5, 0.0, 32.5)).unwrap();
+        assert_eq!(exposure.at(near), 1);
+        assert_eq!(exposure.at(far), 0);
+        assert_eq!(exposure.cost(near), EXPOSURE_COST);
         assert!(Exposure::default().is_empty() && !exposure.is_empty());
     }
 
@@ -344,8 +342,7 @@ mod tests {
 
     #[test]
     fn a_flanker_goes_round_the_side_and_one_without_cover_steps_aside() {
-        let grid = open(80);
-        let ground = (&grid, Vector3::zeros());
+        let ground = &open(80);
         let threat = Vector3::new(40.0, 0.0, 60.0);
         let mates = [Vector3::new(38.0, 0.0, 20.0), Vector3::new(42.0, 0.0, 20.0)];
         let me = Vector3::new(40.0, 0.0, 20.0);

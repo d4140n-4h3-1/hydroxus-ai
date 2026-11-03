@@ -697,11 +697,17 @@ impl NavMesh {
     /// middles of the portals: for how far a noise carries, what can be got to, how far off along
     /// the floor anything is.
     pub fn costs_from(&self, feet: Vector3<f32>, within: f32, extra: impl Fn(Poly) -> f32) -> HashMap<Poly, f32> {
-        self.costs_by(feet, within, &extra)
+        self.entries_by(feet, within, &extra).into_iter().map(|(n, (_, cost))| (n, cost)).collect()
     }
 
-    /// [`NavMesh::costs_from`], not generic (see [`NavMesh::route_by`]).
-    fn costs_by(&self, feet: Vector3<f32>, within: f32, extra: &dyn Fn(Poly) -> f32) -> HashMap<Poly, f32> {
+    /// As [`NavMesh::costs_from`], each polygon with where the way there comes into it, on the
+    /// plan, and the cost to there: for how far it is to a point in it, the cost on from there.
+    pub fn entries_from(&self, feet: Vector3<f32>, within: f32) -> HashMap<Poly, ([f32; 2], f32)> {
+        self.entries_by(feet, within, &|_| 0.0)
+    }
+
+    /// [`NavMesh::entries_from`], weighted, and not generic (see [`NavMesh::route_by`]).
+    fn entries_by(&self, feet: Vector3<f32>, within: f32, extra: &dyn Fn(Poly) -> f32) -> HashMap<Poly, ([f32; 2], f32)> {
         let mut best: HashMap<Poly, ([f32; 2], f32)> = HashMap::new();
         let Some(from) = self.nearest(feet) else {
             return HashMap::new();
@@ -730,7 +736,20 @@ impl NavMesh {
                 }
             }
         }
-        best.into_iter().map(|(n, (_, cost))| (n, cost)).collect()
+        best
+    }
+
+    /// Whether `b` can be seen from `a` along the floor: floor all the way between them, at the
+    /// height of the line between them - no wall, no drop, no other storey in the way. Whether
+    /// anything stands in the way above the floor is the game's to find out.
+    pub fn sees_across(&self, a: Vector3<f32>, b: Vector3<f32>) -> bool {
+        let span = (b.x - a.x).hypot(b.z - a.z);
+        // A few samples a cell, so that the line cannot slip past the corner of a wall.
+        let samples = (span / self.cell_size * 3.0).ceil().max(1.0) as usize;
+        (0..=samples).all(|i| {
+            let p = a + (b - a) * (i as f32 / samples as f32);
+            self.over_spot(p).into_iter().any(|n| (self.floor_of(n) - p.y).abs() <= crate::navigation::grid::LEVEL)
+        })
     }
 
     /// The corners of the ground it covers, on the plan, at the origin's height.

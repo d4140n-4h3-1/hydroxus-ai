@@ -7,7 +7,8 @@ use crate::{
     flat, forward,
     social::group::about_leader,
     navigation::{
-        grid::{Rng, WalkGrid},
+        grid::Rng,
+        navmesh::{NavMesh, Poly},
         route::between,
     },
 };
@@ -35,7 +36,7 @@ pub const OUT_OF_VIEW: f32 = 75.0 * std::f32::consts::PI / 180.0;
 /// A crowd: where it can turn up, and when it is next looked over.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Crowd {
-    /// Whether each cell of the walk grid, row by row, is somewhere one can turn up: off the
+    /// Whether each polygon of the navmesh, by number, is somewhere one can turn up: off the
     /// roads, and where the player started from could be walked to.
     pub pavement: Vec<bool>,
     /// How long till the crowd is next looked over, in seconds.
@@ -48,14 +49,14 @@ impl Crowd {
         Self { pavement, next: CROWD_EVERY }
     }
 
-    /// Somewhere on the floor of `grid` whose corner is at `origin` that one of the crowd could
+    /// Somewhere on the floor of `mesh` that one of the crowd could
     /// have walked to, a little way off the `player`'s feet, where `hidden` says the player cannot
     /// see it turn up; and for a group, room for the rest about it, keeping to `slots` of
     /// [`crate::social::group::ABOUT_LEADER`]: where, which way it faces, and where the rest are.
     #[allow(clippy::type_complexity)]
     pub fn spot(
         &self,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         player: Vector3<f32>,
         slots: &[usize],
         rng: &mut Rng,
@@ -65,22 +66,23 @@ impl Crowd {
             let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
             let away = between(rng, CROWD_BACK);
             let at = player + forward(angle) * away;
-            let cell = grid.cell_at(origin, at)?;
-            let pavement = |(x, z): (usize, usize)| self.pavement.get(z * grid.width + x).copied().unwrap_or(false);
-            if !pavement(cell) {
-                return None;
-            }
-            let feet = grid.on_floor(origin, cell);
+            let pavement = |n: Poly| self.pavement.get(n as usize).copied().unwrap_or(false);
+            // The floor at a spot nearest a height, if it is pavement.
+            let floor = |at: Vector3<f32>, height: f32| {
+                let n = mesh
+                    .over_spot(at)
+                    .into_iter()
+                    .min_by(|&a, &b| (mesh.floor_of(a) - height).abs().total_cmp(&(mesh.floor_of(b) - height).abs()))?;
+                pavement(n).then(|| Vector3::new(at.x, mesh.floor_of(n), at.z))
+            };
+            let feet = floor(at, player.y)?;
             if !hidden(feet) {
                 return None;
             }
             let heading = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
             let about: Option<Vec<Vector3<f32>>> = slots
                 .iter()
-                .map(|&slot| {
-                    let cell = grid.cell_at(origin, about_leader(feet, heading, slot)).filter(|&cell| pavement(cell))?;
-                    Some(grid.on_floor(origin, cell))
-                })
+                .map(|&slot| floor(about_leader(feet, heading, slot), feet.y))
                 .collect();
             Some((feet, heading, about?))
         })
@@ -102,19 +104,20 @@ mod tests {
 
     #[test]
     fn one_of_a_crowd_turns_up_on_the_pavement_a_way_off_where_it_cannot_be_seen() {
-        let mut grid = WalkGrid::new(200, 200, 1.0);
+        let mut grid = crate::navigation::grid::WalkGrid::new(200, 200, 1.0);
         for z in 0..200 {
             for x in 0..200 {
                 grid.set(x, z, true);
             }
         }
         // Pavement only on the west half.
-        let crowd = Crowd::new((0..200 * 200).map(|i| i % 200 < 100).collect());
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |x, _| u8::from(x >= 100));
+        let crowd = Crowd::new((0..mesh.len() as Poly).map(|n| mesh.polygon(n).area == 0).collect());
         let player = Vector3::new(100.0, 0.0, 100.0);
         let mut rng = Rng::new(4);
         let mut found = 0;
         for _ in 0..30 {
-            let Some((feet, _, _)) = crowd.spot((&grid, Vector3::zeros()), player, &[], &mut rng, |at| at.z < 100.0) else {
+            let Some((feet, _, _)) = crowd.spot(&mesh, player, &[], &mut rng, |at| at.z < 100.0) else {
                 continue;
             };
             found += 1;

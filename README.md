@@ -16,7 +16,7 @@ It is in four folders, and its alert phases besides.
 | Module | What it does |
 |--------|--------------|
 | `sight` | What an NPC can see: clearly in a cone in front of it, and near out of the corner of its eye, but nothing behind it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark. |
-| `hearing` | How far a noise carries: along the corridors, not through the walls. |
+| `hearing` | How far a noise carries: along the floor of the navmesh, round the corners, not through the walls. |
 | `bolts` | A bolt flying by: noticed going past in front of it, or felt close by wherever it goes. |
 | `witness` | Whether one that saw a shooting knows who did it: only if it saw them near enough. |
 
@@ -24,7 +24,7 @@ It is in four folders, and its alert phases besides.
 
 | Module | What it does |
 |--------|--------------|
-| `search` | Searching for someone lost from sight, together: where they could be by now, spreading along the ground as fast as they could go, cleared wherever a searcher looks; and where each searcher should look next, clear of where the others are going. In a simulated maze, three searchers find a player who has run off and hidden 98% of the time with it, against 83% wandering. |
+| `search` | Searching for someone lost from sight, together, over the navmesh: where they could be by now, spreading from polygon to polygon no faster than they could go, cleared wherever a searcher looks; and where each searcher should look next, clear of where the others are going. In a simulated maze, three searchers find a player who has run off and hidden within 12 s 88% of the time with it, against 83% wandering - wandering being much better than it was on the grid, its routes running straight down the corridors. |
 | `join` | A sentry that sees another after the player joins in, calm or not, as it would see the player standing - so a chase draws in every one that catches sight of it. |
 | `pace` | Sprinting now and then in a chase, never as it starts; and, for one with breath to keep, easing off to a jog before it runs out, and keeping some back for a last burst. |
 | `chase` | Cutting off whoever is being chased, a little ahead of them, rather than running after them; and running from a pursuer. |
@@ -59,7 +59,7 @@ It is in four folders, and its alert phases besides.
 | `opinion` | What an NPC thinks of the player, from -1 to 1: moved by deeds it sees - shooting, robbing, threatening, bribing, talking it round - easing back with time; friendly, neutral, wary or hostile; and how far that sways a talk check. |
 | `rumour` | What each NPC knows of the player (`Minds`): deeds seen at full strength, told on weaker each time and minded less, fading and forgotten; one turning up afresh has heard what the town talks of. |
 | `chat` | What NPCs talk about among themselves: news one has for another, told on as they talk; or, feeling strongly, what one thinks of the player, swaying the rest; or nothing much. |
-| `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight. |
+| `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight, on the navmesh's pavement. |
 
 ### Besides
 
