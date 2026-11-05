@@ -15,7 +15,8 @@ It is in four folders, and its alert phases besides.
 
 | Module | What it does |
 |--------|--------------|
-| `sight` | What an NPC can see: clearly in a cone in front of it, and near out of the corner of its eye, but nothing behind it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark. |
+| `sight` | What an NPC can see: clearly in a cone in front of it, and near out of the corner of its eye, but nothing behind it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark; and how visible someone is to it, from 0 to 1. |
+| `detection` | Becoming aware of someone gradually, as Fallout's sneaking has it: awareness filling while they are in view, the quicker the more visible they are and the keener it is looking, draining a while after - `[HIDDEN]`, `[CAUTION]`, `[DANGER]` - with events as it notices, spots and loses them, and the most aware of many for a meter. |
 | `hearing` | How far a noise carries: along the floor of the navmesh, round the corners, not through the walls. |
 | `bolts` | A bolt flying by: noticed going past in front of it, or felt close by wherever it goes. |
 | `witness` | Whether one that saw a shooting knows who did it: only if it saw them near enough. |
