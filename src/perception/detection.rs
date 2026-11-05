@@ -35,6 +35,9 @@ tuning!(
         /// How much awareness a noise right beside it adds, of all of it: less the further off
         /// along the floor it was (see [`Heard::nearness`](crate::perception::hearing::Heard::nearness)).
         hearing: f32 = HEARING,
+        /// How many times as quickly it becomes aware of someone with a weapon drawn: it catches
+        /// the eye.
+        armed: f32 = ARMED,
     }
 );
 
@@ -49,6 +52,8 @@ pub const CAUTION: f32 = 0.25;
 pub const SEARCHING: f32 = 3.0;
 /// How much awareness a noise right beside an NPC adds, of all of it.
 pub const HEARING: f32 = 0.6;
+/// How many times as quickly an NPC becomes aware of someone with a weapon drawn.
+pub const ARMED: f32 = 1.5;
 
 /// How aware an NPC is of someone, as a sneaking player is shown it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

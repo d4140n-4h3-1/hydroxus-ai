@@ -11,6 +11,8 @@ pub enum Deed {
     Robbing,
     /// Pointed a weapon at someone.
     Threatening,
+    /// Went about with a weapon drawn, near someone.
+    Brandishing,
     /// Paid someone off.
     Bribing,
     /// Talked someone round.
@@ -24,13 +26,14 @@ impl Deed {
             Deed::Shooting => -0.6,
             Deed::Robbing => -0.3,
             Deed::Threatening => -0.25,
+            Deed::Brandishing => -0.05,
             Deed::Bribing => 0.15,
             Deed::Persuading => 0.05,
         }
     }
 
-    /// Whether it is talked about: told on to others as a rumour. A bribe, or being talked round,
-    /// is kept to oneself.
+    /// Whether it is talked about: told on to others as a rumour. A bribe, being talked round, or a
+    /// weapon only drawn, is kept to oneself.
     pub fn spreads(self) -> bool {
         matches!(self, Deed::Shooting | Deed::Robbing | Deed::Threatening)
     }
