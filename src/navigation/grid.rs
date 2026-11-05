@@ -22,6 +22,19 @@ pub const LEVEL: f32 = 1.0;
 /// the floor under someone's feet before the one under the floor they are on, however near.
 pub const STOREY_AWAY: f32 = 8.0;
 
+tuning!(
+    /// The ground as a walker takes it (see the module's constants, its defaults): kept with the
+    /// grid, and the navmesh made from it.
+    {
+        /// How much higher or lower a neighbour's floor can be for a step: a stair, not a ledge.
+        max_climb: f32 = MAX_CLIMB,
+        /// How far above or below a height a floor can be and still be at it.
+        level: f32 = LEVEL,
+        /// How many cells across a storey's height counts as, for the nearest floor to a point.
+        storey_away: f32 = STOREY_AWAY,
+    }
+);
+
 /// A grid of walkable cells over a level's footprint, each `cell_size` meters across, with how
 /// high the floor is in each - on as many storeys as the level has floors over one another (see
 /// [`WalkGrid::with_storeys`]).
@@ -42,6 +55,8 @@ pub struct WalkGrid {
     /// Where a step each of the [`WAYS`] from each cell lands (see [`Links`]): worked out once,
     /// the first time a search needs it, and again only after the grid changes.
     links: OnceLock<Vec<Links>>,
+    /// How the ground is taken: how high a step, how far a storey.
+    pub tuning: Tuning,
 }
 
 impl PartialEq for WalkGrid {
@@ -50,6 +65,7 @@ impl PartialEq for WalkGrid {
         (self.width, self.depth, self.storeys, self.cell_size) == (other.width, other.depth, other.storeys, other.cell_size)
             && self.cells == other.cells
             && self.floors == other.floors
+            && self.tuning == other.tuning
     }
 }
 
@@ -82,7 +98,15 @@ impl WalkGrid {
             cells: vec![false; width * depth * storeys],
             floors: vec![0.0; width * depth * storeys],
             links: OnceLock::new(),
+            tuning: Tuning::DEFAULT,
         }
+    }
+
+    /// The grid, the ground taken as `tuning` says.
+    pub fn with_tuning(mut self, tuning: Tuning) -> Self {
+        self.tuning = tuning;
+        self.links = OnceLock::new();
+        self
     }
 
     /// How many rows of cells there are, every storey's: `depth` times `storeys`.
@@ -160,7 +184,7 @@ impl WalkGrid {
     /// Whether a step from cell `from` to `to` can be taken: `to` is walkable, and its floor no
     /// more than [`MAX_CLIMB`] above or below `from`'s - up a stair, not a ledge.
     pub fn can_step(&self, from: (usize, usize), to: (usize, usize)) -> bool {
-        self.is_walkable(to.0, to.1) && (self.floor(to.0, to.1) - self.floor(from.0, from.1)).abs() <= MAX_CLIMB
+        self.is_walkable(to.0, to.1) && (self.floor(to.0, to.1) - self.floor(from.0, from.1)).abs() <= self.tuning.max_climb
     }
 
     /// The cell a step `(dx, dz)` across the plan from `from` lands in: the walkable one there, on
@@ -319,7 +343,7 @@ impl WalkGrid {
         let z = ((point.z - origin.z) / self.cell_size).floor().clamp(0.0, (self.depth.max(1) - 1) as f32) as isize;
         let away = |cell: (usize, usize)| {
             let flat = crate::flat(self.center(origin, cell) - point).norm() / self.cell_size;
-            flat + (self.floor(cell.0, cell.1) - point.y).abs() / LEVEL * STOREY_AWAY
+            flat + (self.floor(cell.0, cell.1) - point.y).abs() / self.tuning.level * self.tuning.storey_away
         };
         let most = self.width.max(self.depth) as isize;
         let mut best: Option<((usize, usize), f32)> = None;
@@ -348,7 +372,7 @@ impl WalkGrid {
     pub fn walkable_cell(&self, origin: Vector3<f32>, point: Vector3<f32>) -> Option<(usize, usize)> {
         self.cell_at(origin, point)
             .filter(|&(x, z)| self.is_walkable(x, z))
-            .filter(|&(x, z)| (self.floor(x, z) - point.y).abs() <= LEVEL)
+            .filter(|&(x, z)| (self.floor(x, z) - point.y).abs() <= self.tuning.level)
             .or_else(|| self.nearest_walkable(origin, point))
     }
 }

@@ -13,8 +13,9 @@
 //! - **Down**: brought down, it thinks no more.
 //!
 //! The game says what it sees, finds its ways ([`Ways`]) and what is round it as it flies
-//! ([`Air`]), and moves its body, plays its animations and fires; this decides where it goes and
-//! what it has to say about it, by name: `spotted`, `searching`, `alarm` and `calm`.
+//! ([`Air`]), and moves its body, plays its animations and fires; this decides where it goes, and
+//! tells the game what came of it ([`Event`]) - for it to say, play or show as it likes. How far
+//! and how long it does each is its [`Tuning`].
 
 use crate::flat;
 use nalgebra::Vector3;
@@ -40,6 +41,46 @@ pub const REACHED: f32 = 0.6;
 pub const ARRIVED: f32 = 0.15;
 /// How quickly it follows the floor up and down.
 pub const FLOOR_EASING: f32 = 4.0;
+
+tuning!(
+    /// How a flying sentry goes about its patrol (see the module's constants, its defaults).
+    {
+        /// How long it searches, in seconds.
+        search: f32 = SEARCH,
+        /// How far each patrol trip goes, and how far between the spots it searches, in meters of
+        /// walking, from least to most; how far from its post it patrols; and how long it rests
+        /// between trips, in seconds.
+        trip: (f32, f32) = TRIP,
+        search_trip: (f32, f32) = SEARCH_TRIP,
+        post_reach: f32 = POST_REACH,
+        rest: (f32, f32) = REST,
+        /// On Alert: how near it comes, how far off it fires from, in meters; how soon it first
+        /// fires, and how often it works out its way again, in seconds.
+        engage: f32 = ENGAGE,
+        fire_range: f32 = FIRE_RANGE,
+        first_shot: f32 = FIRST_SHOT,
+        replan: f32 = REPLAN,
+        /// How near a point of its route counts as reached, and the last as there, in meters.
+        reached: f32 = REACHED,
+        arrived: f32 = ARRIVED,
+        /// How quickly it follows the floor up and down.
+        floor_easing: f32 = FLOOR_EASING,
+    }
+);
+
+/// What came of what a sentry did, for the game to say, play or show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Event {
+    /// It saw the player, and is on Alert.
+    Spotted,
+    /// It lost them and searches where it last saw them; or set off to where it was sent to
+    /// search, or to where a shot came from.
+    Searching,
+    /// The alarm sent it, calm, to search.
+    Alarmed,
+    /// Its search ran out: it is calm again.
+    Calm,
+}
 
 /// How it is going about the player.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -122,6 +163,8 @@ pub struct Patrol {
     pub flies_free: bool,
     pub speeds: Speeds,
     pub scan_for: f32,
+    /// How far and how long it does each thing.
+    pub tuning: Tuning,
 }
 
 impl Patrol {
@@ -147,6 +190,7 @@ impl Patrol {
             flies_free,
             speeds,
             scan_for,
+            tuning: Tuning::DEFAULT,
         }
     }
 
@@ -180,7 +224,7 @@ impl Patrol {
 
     /// Searches from `at`, going there first.
     pub fn search(&mut self, at: Vector3<f32>) {
-        self.state = State::Search { left: SEARCH };
+        self.state = State::Search { left: self.tuning.search };
         self.lost_at = at;
         self.searched = 0;
         self.route.clear();
@@ -193,19 +237,30 @@ impl Patrol {
             self.state = State::Patrol;
             self.route.clear();
             self.scanning = 0.0;
-            self.resting = REST.0;
+            self.resting = self.tuning.rest.0;
         }
     }
 
-    /// The alarm sounded with the player at `at`, or a bolt flew by from there: calm or
-    /// searching, it searches there. What it has to say about it if it was calm - `calm_says` -
-    /// if anything.
-    pub fn alerted(&mut self, at: Vector3<f32>, calm_says: &'static str) -> Option<&'static str> {
+    /// The alarm sounded with the player at `at`: calm or searching, it searches there.
+    /// [`Event::Alarmed`] if it was calm.
+    pub fn alarm(&mut self, at: Vector3<f32>) -> Option<Event> {
+        self.alerted(at, Event::Alarmed)
+    }
+
+    /// A bolt flew by from `at`: calm or searching, it searches there. [`Event::Searching`] if it
+    /// was calm.
+    pub fn shot_at(&mut self, at: Vector3<f32>) -> Option<Event> {
+        self.alerted(at, Event::Searching)
+    }
+
+    /// Sent to search at `at`, if it is not after the player already or down: `calm` if it was
+    /// calm.
+    fn alerted(&mut self, at: Vector3<f32>, calm: Event) -> Option<Event> {
         match self.state {
             State::Down | State::Alert => None,
             was => {
                 self.search(at);
-                (was == State::Patrol).then_some(calm_says)
+                (was == State::Patrol).then_some(calm)
             }
         }
     }
@@ -228,16 +283,17 @@ impl Patrol {
     /// Takes in what it `sees` - whether it can see the player, whose feet are at `player`, if it
     /// looked (see [`Patrol::looks`]) - and decides where to go, finding its `ways`, for another
     /// `dt`. What it has to say, if anything.
-    pub fn think(&mut self, sees: bool, player: Vector3<f32>, ways: &mut dyn Ways, dt: f32) -> Option<&'static str> {
+    pub fn think(&mut self, sees: bool, player: Vector3<f32>, ways: &mut dyn Ways, dt: f32) -> Option<Event> {
         let under = self.under();
+        let tuning = self.tuning;
         match self.state {
             State::Down => None,
             State::Patrol | State::Search { .. } if sees => {
                 self.state = State::Alert;
-                self.fire_in = FIRST_SHOT;
+                self.fire_in = tuning.first_shot;
                 self.replan = 0.0;
                 self.scanning = 0.0;
-                Some("spotted")
+                Some(Event::Spotted)
             }
             State::Patrol => {
                 if self.route.is_empty() {
@@ -246,12 +302,12 @@ impl Patrol {
                         self.route = match self.post {
                             // Keeping a post, round it.
                             Some(post) => ways
-                                .spot_near(post, POST_REACH)
+                                .spot_near(post, tuning.post_reach)
                                 .map(|to| ways.route_to(to))
                                 .unwrap_or_default(),
-                            None => ways.trip(under, TRIP),
+                            None => ways.trip(under, tuning.trip),
                         };
-                        self.resting = ways.between(REST);
+                        self.resting = ways.between(tuning.rest);
                     }
                 }
                 None
@@ -259,7 +315,7 @@ impl Patrol {
             State::Alert if !sees => {
                 let at = self.lost_at;
                 self.search(at);
-                Some("searching")
+                Some(Event::Searching)
             }
             State::Alert => {
                 self.lost_at = player;
@@ -273,15 +329,15 @@ impl Patrol {
                     true => (player + Vector3::new(0.0, self.hover, 0.0) - self.at).norm(),
                     false => to.norm(),
                 };
-                if near <= ENGAGE {
+                if near <= tuning.engage {
                     self.route.clear();
                 } else if self.replan <= 0.0 || self.route.is_empty() && !self.no_way {
-                    self.replan = REPLAN;
+                    self.replan = tuning.replan;
                     self.route = ways.route_to(player);
                     self.no_way = self.route.is_empty();
                 }
                 // Out of range, it holds its fire till it is nearer.
-                if to.norm() > FIRE_RANGE {
+                if to.norm() > tuning.fire_range {
                     self.fire_in = self.fire_in.max(0.1);
                 }
                 None
@@ -294,8 +350,8 @@ impl Patrol {
                     self.state = State::Patrol;
                     self.route.clear();
                     self.scanning = 0.0;
-                    self.resting = REST.0;
-                    return Some("calm");
+                    self.resting = tuning.rest.0;
+                    return Some(Event::Calm);
                 }
                 self.state = State::Search { left };
                 let mut says = None;
@@ -305,14 +361,14 @@ impl Patrol {
                     if self.scanning <= 0.0 {
                         self.scanning = 0.0;
                         self.searched += 1;
-                        self.route = ways.trip(under, SEARCH_TRIP);
+                        self.route = ways.trip(under, tuning.search_trip);
                     }
                 } else if self.route.is_empty() {
-                    if self.searched == 0 && flat(self.lost_at - under).norm() > REACHED {
+                    if self.searched == 0 && flat(self.lost_at - under).norm() > tuning.reached {
                         // First where the player was.
                         self.searched = 1;
                         self.route = ways.route_to(self.lost_at);
-                        says = Some("searching");
+                        says = Some(Event::Searching);
                     } else {
                         // Got there, or has nowhere to go: it scans.
                         self.searched = self.searched.max(1);
@@ -347,7 +403,7 @@ impl Patrol {
         };
         // Past the points it has got near, the last one only once it is there.
         while let Some(&next) = self.route.last() {
-            let near = if self.route.len() == 1 { ARRIVED } else { REACHED };
+            let near = if self.route.len() == 1 { self.tuning.arrived } else { self.tuning.reached };
             if toward(next).norm() > near {
                 break;
             }
@@ -399,7 +455,7 @@ impl Patrol {
             }
         } else if let Some(floor) = air.floor_under(next - Vector3::new(0.0, self.hover, 0.0)) {
             let height = floor + self.hover;
-            next.y += (height - next.y) * (1.0 - (-FLOOR_EASING * dt).exp());
+            next.y += (height - next.y) * (1.0 - (-self.tuning.floor_easing * dt).exp());
         }
         // Never into anyone, sideways, up or down: it waits for them to move.
         if air.blocked(self.at, next - self.at) {
@@ -477,7 +533,7 @@ mod tests {
         let mut patrol = sentry();
         patrol.search(Vector3::new(0.0, 0.0, 5.0));
         let player = Vector3::new(20.0, 0.0, 0.0);
-        assert_eq!(patrol.think(true, player, &mut Open, 0.1), Some("spotted"));
+        assert_eq!(patrol.think(true, player, &mut Open, 0.1), Some(Event::Spotted));
         assert_eq!(patrol.state, State::Alert);
         let dt = 0.1;
         for _ in 0..200 {
@@ -489,23 +545,48 @@ mod tests {
         assert!(wrap(patrol.heading - std::f32::consts::FRAC_PI_2).abs() < 0.05, "facing them: {}", patrol.heading);
         assert!(patrol.fire_in <= 0.0, "ready to fire");
         // Lost from sight: it searches where it last saw them.
-        assert_eq!(patrol.think(false, player, &mut Open, dt), Some("searching"));
+        assert_eq!(patrol.think(false, player, &mut Open, dt), Some(Event::Searching));
         assert_eq!(patrol.lost_at, player);
     }
 
     #[test]
     fn a_search_runs_out_and_it_is_calm_again() {
         let mut patrol = sentry();
-        assert_eq!(patrol.alerted(Vector3::new(0.0, 0.0, 3.0), "alarm"), Some("alarm"));
+        assert_eq!(patrol.alarm(Vector3::new(0.0, 0.0, 3.0)), Some(Event::Alarmed));
         let (player, dt) = (Vector3::new(100.0, 0.0, 0.0), 0.1);
         let mut said = Vec::new();
         for _ in 0..((SEARCH + 60.0) / dt) as usize {
             said.extend(patrol.think(false, player, &mut Open, dt));
             patrol.fly(player, &Open, dt);
         }
-        assert_eq!(said.last(), Some(&"calm"), "{said:?}");
+        assert_eq!(said.last(), Some(&Event::Calm), "{said:?}");
         assert_eq!(patrol.state, State::Patrol);
         assert!(patrol.searched >= 2, "it searched more than one spot: {}", patrol.searched);
+    }
+
+    #[test]
+    fn its_tuning_is_its_own() {
+        // Searching 5 s rather than 30, it is calm again long before the default would be.
+        let mut patrol = sentry();
+        patrol.tuning.search = 5.0;
+        assert_eq!(patrol.shot_at(Vector3::new(0.0, 0.0, 1.0)), Some(Event::Searching));
+        let (player, dt) = (Vector3::new(100.0, 0.0, 0.0), 0.1);
+        let calm = (0..(20.0 / dt) as usize).position(|_| {
+            let said = patrol.think(false, player, &mut Open, dt);
+            patrol.fly(player, &Open, dt);
+            said == Some(Event::Calm)
+        });
+        assert!(calm.is_some_and(|step| (step as f32 * dt) < SEARCH), "{calm:?}");
+        // Coming on to 15 m on Alert, not 6.
+        let mut patrol = sentry();
+        patrol.tuning.engage = 15.0;
+        let player = Vector3::new(40.0, 0.0, 0.0);
+        for _ in 0..400 {
+            patrol.think(true, player, &mut Open, dt);
+            patrol.fly(player, &Open, dt);
+        }
+        let away = flat(player - patrol.under()).norm();
+        assert!(away > ENGAGE + 5.0 && away <= 15.5, "{away}");
     }
 
     #[test]
@@ -513,7 +594,8 @@ mod tests {
         let mut patrol = sentry();
         patrol.down();
         assert_eq!(patrol.think(true, Vector3::zeros(), &mut Open, 0.1), None);
-        assert_eq!(patrol.alerted(Vector3::zeros(), "alarm"), None);
+        assert_eq!(patrol.alarm(Vector3::zeros()), None);
+        assert_eq!(patrol.shot_at(Vector3::zeros()), None);
         assert!(!patrol.looks());
     }
 }

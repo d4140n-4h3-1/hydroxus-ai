@@ -17,6 +17,21 @@ pub const REPORT_LOOK_EVERY: f32 = 1.0;
 /// How far off, in meters, those that answer an alarm hear it.
 pub const ALARM_RANGE: f32 = 40.0;
 
+tuning!(
+    /// How a witness tells a sentry, and how far an alarm carries (see the module's constants,
+    /// its defaults).
+    {
+        /// How far off a witness looks for a sentry, and how near it has to get to tell it, in
+        /// meters; how long it hides, with none about, and how often it looks, in seconds.
+        report_reach: f32 = REPORT_REACH,
+        report_near: f32 = REPORT_NEAR,
+        hide_for: f32 = HIDE_FOR,
+        report_look_every: f32 = REPORT_LOOK_EVERY,
+        /// How far off an alarm is heard, in meters.
+        alarm_range: f32 = ALARM_RANGE,
+    }
+);
+
 /// One that has seen what the player did, on its way to tell a sentry of it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Witness {
@@ -28,6 +43,8 @@ pub struct Witness {
     to: Option<usize>,
     look_in: f32,
     left: f32,
+    /// How it goes about telling.
+    tuning: Tuning,
 }
 
 /// What a witness does, a step on.
@@ -46,7 +63,13 @@ pub enum Telling {
 impl Witness {
     /// One that saw it done `at`, and `knows` who did it or not.
     pub fn new(at: Vector3<f32>, knows: bool) -> Self {
-        Self { at, knows, to: None, look_in: 0.0, left: HIDE_FOR }
+        Self::with(at, knows, Tuning::DEFAULT)
+    }
+
+    /// One that saw it done `at`, and `knows` who did it or not, going about telling as `tuning`
+    /// says.
+    pub fn with(at: Vector3<f32>, knows: bool, tuning: Tuning) -> Self {
+        Self { at, knows, to: None, look_in: 0.0, left: tuning.hide_for, tuning }
     }
 
     /// The sentry it is making for, if any.
@@ -62,11 +85,11 @@ impl Witness {
         let to = match mine {
             Some(to) => Some(to),
             None if self.look_in <= 0.0 => {
-                self.look_in = REPORT_LOOK_EVERY;
+                self.look_in = self.tuning.report_look_every;
                 sentries
                     .iter()
                     .copied()
-                    .filter(|&(_, at)| flat(at - feet).norm() < REPORT_REACH)
+                    .filter(|&(_, at)| flat(at - feet).norm() < self.tuning.report_reach)
                     .min_by(|a, b| flat(a.1 - feet).norm().total_cmp(&flat(b.1 - feet).norm()))
             }
             None => None,
@@ -75,7 +98,7 @@ impl Witness {
             Some((s, at)) => {
                 let afresh = self.to != Some(s);
                 self.to = Some(s);
-                if flat(at - feet).norm() < REPORT_NEAR {
+                if flat(at - feet).norm() < self.tuning.report_near {
                     Telling::Told(s)
                 } else {
                     Telling::MakingFor { sentry: s, afresh }
@@ -95,8 +118,8 @@ impl Witness {
 }
 
 /// Whether one at `feet` hears an alarm sounded at `from`.
-pub fn hears_alarm(from: Vector3<f32>, feet: Vector3<f32>) -> bool {
-    (feet - from).norm() < ALARM_RANGE
+pub fn hears_alarm(tuning: &Tuning, from: Vector3<f32>, feet: Vector3<f32>) -> bool {
+    (feet - from).norm() < tuning.alarm_range
 }
 
 #[cfg(test)]
@@ -124,7 +147,7 @@ mod tests {
         let mut alone = Witness::new(Vector3::zeros(), false);
         let gave_up = (0..(HIDE_FOR as usize + 2)).any(|_| alone.step(1.0, Vector3::zeros(), &[]) == Telling::GaveUp);
         assert!(gave_up);
-        assert!(hears_alarm(Vector3::zeros(), Vector3::new(ALARM_RANGE - 1.0, 0.0, 0.0)));
-        assert!(!hears_alarm(Vector3::zeros(), Vector3::new(ALARM_RANGE + 1.0, 0.0, 0.0)));
+        assert!(hears_alarm(&Tuning::DEFAULT, Vector3::zeros(), Vector3::new(ALARM_RANGE - 1.0, 0.0, 0.0)));
+        assert!(!hears_alarm(&Tuning::DEFAULT, Vector3::zeros(), Vector3::new(ALARM_RANGE + 1.0, 0.0, 0.0)));
     }
 }

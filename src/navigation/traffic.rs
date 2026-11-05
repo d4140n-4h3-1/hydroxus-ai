@@ -44,20 +44,59 @@ pub const ALL_RED: f32 = 1.5;
 pub const CYCLE: f32 = 2.0 * (GREEN + AMBER + ALL_RED);
 
 /// How near the player a bike is put down at the start, at least.
-const CLEAR_OF_PLAYER: f32 = 40.0;
+pub const CLEAR_OF_PLAYER: f32 = 40.0;
 /// How fast a bike goes along a street, at the least and the most, and round a turn; how hard it
 /// picks up speed, and brakes - as it means to, and at the most.
-const CRUISE: (f32, f32) = (11.0, 15.0);
-const TURN_SPEED: f32 = 6.0;
-const ACCEL: f32 = 3.5;
-const EASE: f32 = 4.0;
-const BRAKE: f32 = 9.0;
+pub const CRUISE: (f32, f32) = (11.0, 15.0);
+pub const TURN_SPEED: f32 = 6.0;
+pub const ACCEL: f32 = 3.5;
+pub const EASE: f32 = 4.0;
+pub const BRAKE: f32 = 9.0;
 /// How far ahead a bike looks for someone in its way, and how far short of them it stops, is
 /// [`drive::room_ahead`]'s.
 /// How long a bike waits behind another before it goes on round it all the same: two waiting for
 /// each other across a junction - one turning left, one coming the other way - would wait for
 /// ever. It never goes on into anyone on foot.
-const PATIENCE: f32 = 2.5;
+pub const PATIENCE: f32 = 2.5;
+
+tuning!(
+    /// A city's streets and its traffic (see the module's constants, its defaults): kept with its
+    /// [`Network`].
+    {
+        /// A lane's width; how far from a junction's middle a lane starts going out, and its
+        /// traffic stops coming in, in meters.
+        lane: f32 = LANE,
+        exit: f32 = EXIT,
+        stop: f32 = STOP,
+        /// Where a stop light's mast stands from the junction's middle, back along the street and
+        /// out over the pavement, and how far and how high its arm reaches, in meters.
+        mast_back: f32 = MAST_BACK,
+        mast_out: f32 = MAST_OUT,
+        arm: (f32, f32) = ARM,
+        /// How long a street's traffic has green, and amber, and both red after, in seconds.
+        green: f32 = GREEN,
+        amber: f32 = AMBER,
+        all_red: f32 = ALL_RED,
+        /// How near the player a bike is put down at the start, at least, in meters.
+        clear_of_player: f32 = CLEAR_OF_PLAYER,
+        /// How fast a bike goes along a street, from least to most, and round a turn; how hard it
+        /// picks up speed, eases off and brakes, in meters a second and a second squared.
+        cruise: (f32, f32) = CRUISE,
+        turn_speed: f32 = TURN_SPEED,
+        accel: f32 = ACCEL,
+        ease: f32 = EASE,
+        brake: f32 = BRAKE,
+        /// How long a bike waits behind another before it goes round it all the same, in seconds.
+        patience: f32 = PATIENCE,
+    }
+);
+
+impl Tuning {
+    /// How long the lights take to come round, in seconds: green, amber and red each way.
+    pub fn cycle(&self) -> f32 {
+        2.0 * (self.green + self.amber + self.all_red)
+    }
+}
 
 /// The four ways along the streets, by number: +x, +z, -x, -z. Turning right from way `w` is way
 /// `w + 1`, left `w + 3`, back `w + 2`, all round the four.
@@ -73,8 +112,8 @@ fn right_of(d: Vector3<f32>) -> Vector3<f32> {
 }
 
 /// How far out from the middle of the street lane `k` is: 0 the one by the middle, 1 by the kerb.
-fn lane_out(k: usize) -> f32 {
-    LANE * (k as f32 + 0.5)
+fn lane_out(tuning: &Tuning, k: usize) -> f32 {
+    tuning.lane * (k as f32 + 0.5)
 }
 
 /// Whether a street through `centre` (x for one running along z, z for one along x) is a main
@@ -113,6 +152,8 @@ pub struct Link {
 pub struct Network {
     pub junctions: Vec<Junction>,
     pub links: Vec<Link>,
+    /// The streets' layout and lights, and how their traffic drives.
+    pub tuning: Tuning,
 }
 
 /// Where a ray from a point along a way (of length 1) first meets something within a reach, if
@@ -124,6 +165,11 @@ impl Network {
     /// kerb: a junction where one along x crosses one along z, a link each way between each two
     /// next to each other along a street. All of it drivable until it is surveyed.
     pub fn from_roads(roads: &[[f32; 4]]) -> Self {
+        Self::from_roads_with(roads, Tuning::DEFAULT)
+    }
+
+    /// [`Network::from_roads`], laid out, lit and driven as `tuning` says.
+    pub fn from_roads_with(roads: &[[f32; 4]], tuning: Tuning) -> Self {
         // Each street: along x or along z, through which middle, from where to where.
         let streets: Vec<(bool, f32, f32, f32)> = roads
             .iter()
@@ -136,7 +182,7 @@ impl Network {
                 }
             })
             .collect();
-        let mut net = Network::default();
+        let mut net = Network { tuning, ..Network::default() };
         let mut on_street: Vec<Vec<(f32, usize)>> = vec![Vec::new(); streets.len()];
         for (a, &(ax, ac, a0, a1)) in streets.iter().enumerate() {
             for (b, &(bx, bc, b0, b1)) in streets.iter().enumerate() {
@@ -188,9 +234,9 @@ impl Network {
     pub fn lane_ends(&self, link: usize, lane: usize) -> (Vector3<f32>, Vector3<f32>) {
         let l = &self.links[link];
         let d = way(l.way);
-        let off = right_of(d) * lane_out(lane);
+        let off = right_of(d) * lane_out(&self.tuning, lane);
         let (a, b) = (self.junctions[l.from].at, self.junctions[l.to].at);
-        (a + d * EXIT + off, b - d * STOP + off)
+        (a + d * self.tuning.exit + off, b - d * self.tuning.stop + off)
     }
 
     /// The curve through junction `j` from lane `from_lane` coming in going `from` to lane
@@ -198,13 +244,14 @@ impl Network {
     pub fn turn_curve(&self, j: usize, from: usize, to: usize, from_lane: usize, to_lane: usize) -> [Vector3<f32>; 3] {
         let at = self.junctions[j].at;
         let (din, dout) = (way(from), way(to));
-        let p0 = at - din * STOP + right_of(din) * lane_out(from_lane);
-        let p1 = at + dout * EXIT + right_of(dout) * lane_out(to_lane);
+        let t = &self.tuning;
+        let p0 = at - din * t.stop + right_of(din) * lane_out(t, from_lane);
+        let p1 = at + dout * t.exit + right_of(dout) * lane_out(t, to_lane);
         let corner = if from == to {
             (p0 + p1) / 2.0
         } else if (from + 2) % 4 == to {
             // Round and back: out past the middle.
-            at + din * 2.0 + (right_of(din) * lane_out(from_lane) + right_of(dout) * lane_out(to_lane)) / 2.0
+            at + din * 2.0 + (right_of(din) * lane_out(t, from_lane) + right_of(dout) * lane_out(t, to_lane)) / 2.0
         } else {
             // Where the lane in and the lane out would meet: they cross square on.
             p0 + din * (p1 - p0).dot(&din)
@@ -281,9 +328,9 @@ impl Network {
             // Only where traffic comes in: at the city's edge a junction has a street but three ways.
             let out = junction.out;
             let room = (0..4).filter(|&w| out[w].is_some()).all(|w| {
-                let (mast, arm) = signal_place(at, w);
+                let (mast, arm) = signal_place(&self.tuning, at, w);
                 let foot_clear = cast(rise(mast, 6.5), -Vector3::y(), 7.0).is_some_and(|hit| hit.y < at.y + 0.5);
-                foot_clear && cast(rise(mast, ARM.1), arm, ARM.0).is_none()
+                foot_clear && cast(rise(mast, self.tuning.arm.1), arm, self.tuning.arm.0).is_none()
             });
             let junction = &mut self.junctions[j];
             junction.lit = room;
@@ -321,11 +368,11 @@ fn turn_lanes(from: usize, to: usize) -> (usize, usize) {
 /// Where the mast of the stop light holding the traffic coming in to the junction at `at` from
 /// way `w` stands - on the corner on its right, back behind the crossing - and which way its arm
 /// reaches, over the street.
-pub fn signal_place(at: Vector3<f32>, w: usize) -> (Vector3<f32>, Vector3<f32>) {
+pub fn signal_place(tuning: &Tuning, at: Vector3<f32>, w: usize) -> (Vector3<f32>, Vector3<f32>) {
     let back = way(w);
     let going = -back;
     let right = right_of(going);
-    (at + back * MAST_BACK + right * MAST_OUT, -right)
+    (at + back * tuning.mast_back + right * tuning.mast_out, -right)
 }
 
 /// A point `t` of the way along the quadratic curve through `p`.
@@ -354,11 +401,12 @@ pub enum Light {
 /// What the lights of a junction show the street along `axis` (0 along x, 1 along z), `t` seconds
 /// into their cycle: green, amber and then red for the x street while the z street has red, and
 /// then the other way round, with red both ways between.
-pub fn light(axis: usize, t: f32) -> Light {
-    let t = (t.rem_euclid(CYCLE) - if axis == 0 { 0.0 } else { CYCLE / 2.0 }).rem_euclid(CYCLE);
-    if t < GREEN {
+pub fn light(tuning: &Tuning, axis: usize, t: f32) -> Light {
+    let cycle = tuning.cycle();
+    let t = (t.rem_euclid(cycle) - if axis == 0 { 0.0 } else { cycle / 2.0 }).rem_euclid(cycle);
+    if t < tuning.green {
         Light::Green
-    } else if t < GREEN + AMBER {
+    } else if t < tuning.green + tuning.amber {
         Light::Amber
     } else {
         Light::Red
@@ -397,6 +445,8 @@ pub struct Rider {
 pub struct Traffic {
     pub network: Network,
     pub riders: Vec<Rider>,
+    /// How the bikes get by and stop for others.
+    pub drive: drive::Tuning,
     /// How long the traffic has gone, for the lights' cycles.
     pub time: f32,
 }
@@ -421,7 +471,7 @@ impl Traffic {
             let length = (b - a).norm();
             let along = pick() * length;
             let at = a + (b - a).normalize() * along;
-            if (at - player).norm() < CLEAR_OF_PLAYER || traffic.riders.iter().any(|r| (r.at - at).norm() < 14.0) {
+            if (at - player).norm() < traffic.network.tuning.clear_of_player || traffic.riders.iter().any(|r| (r.at - at).norm() < 14.0) {
                 continue;
             }
             let to = traffic.network.links[link].to;
@@ -430,7 +480,7 @@ impl Traffic {
                 continue;
             }
             let next = ways[((pick() * ways.len() as f32) as usize).min(ways.len() - 1)];
-            let cruise = CRUISE.0 + (CRUISE.1 - CRUISE.0) * pick();
+            let cruise = traffic.network.tuning.cruise.0 + (traffic.network.tuning.cruise.1 - traffic.network.tuning.cruise.0) * pick();
             traffic.riders.push(Rider {
                 leg: Leg::Lane { link, lane },
                 along,
@@ -449,7 +499,7 @@ impl Traffic {
     /// What junction `j`'s lights show the traffic coming in going `from`, if it is lit.
     pub fn light_for(&self, j: usize, from: usize) -> Option<Light> {
         let junction = &self.network.junctions[j];
-        junction.lit.then(|| light(from % 2, self.time + junction.offset))
+        junction.lit.then(|| light(&self.network.tuning, from % 2, self.time + junction.offset))
     }
 
     /// Runs the traffic on `dt` seconds, the bikes stopping for `people` on foot.
@@ -463,13 +513,14 @@ impl Traffic {
                 inside[junction].push(from);
             }
         }
+        let tuning = self.network.tuning;
         for n in 0..self.riders.len() {
             let (target, hold, blocked) = self.wanted_speed(n, &bikes, people, &inside);
             let rider = &mut self.riders[n];
             rider.waited = if blocked && rider.speed < 0.5 { rider.waited + dt } else { 0.0 };
             // Picking up speed gently; slowing as hard as it has to, up to the hardest it can.
             let change = target - rider.speed;
-            rider.speed = (rider.speed + change.clamp(-BRAKE * dt, ACCEL * dt)).max(0.0);
+            rider.speed = (rider.speed + change.clamp(-tuning.brake * dt, tuning.accel * dt)).max(0.0);
             let length = self.leg_length(n);
             let mut along = self.riders[n].along + self.riders[n].speed * dt;
             if along >= length {
@@ -501,7 +552,8 @@ impl Traffic {
         inside: &[Vec<usize>],
     ) -> (f32, bool, bool) {
         let rider = &self.riders[n];
-        let impatient = rider.waited > PATIENCE;
+        let tuning = &self.network.tuning;
+        let impatient = rider.waited > tuning.patience;
         let mut target = rider.cruise;
         let mut hold = false;
         let left = self.leg_length(n) - rider.along;
@@ -511,21 +563,21 @@ impl Traffic {
                 let from = l.way;
                 // Easing off for the turn ahead.
                 if rider.next != from {
-                    target = target.min(drive::easing_for(TURN_SPEED, left, EASE));
+                    target = target.min(drive::easing_for(tuning.turn_speed, left, tuning.ease));
                 }
                 hold = match self.light_for(l.to, from) {
                     Some(Light::Green) => false,
                     // On amber, stopping if it can, without braking hard.
-                    Some(Light::Amber) => drive::stops_on_amber(rider.speed, left, EASE),
+                    Some(Light::Amber) => drive::stops_on_amber(rider.speed, left, tuning.ease),
                     Some(Light::Red) => true,
                     // No lights: in while nothing is crossing the other way.
                     None => inside[l.to].iter().any(|&w| w % 2 != from % 2),
                 };
                 if hold {
-                    target = target.min(drive::easing_for(0.0, (left - 0.3).max(0.0), EASE));
+                    target = target.min(drive::easing_for(0.0, (left - 0.3).max(0.0), tuning.ease));
                 }
             }
-            Leg::Turn { .. } => target = target.min(TURN_SPEED),
+            Leg::Turn { .. } => target = target.min(tuning.turn_speed),
         }
         // Whoever is in the way before it: the bike in front, keeping its distance; anyone on
         // foot, stopping short of them.
@@ -535,7 +587,7 @@ impl Traffic {
             .filter(|&(m, _)| m != n)
             .map(|(_, &(at, _))| Obstacle::Vehicle(at))
             .chain(people.iter().map(|&p| Obstacle::Foot(p)));
-        let (anyone, bikes_ahead) = drive::room_ahead(rider.at, rider.ahead, obstacles, BRAKE, impatient);
+        let (anyone, bikes_ahead) = drive::room_ahead(&self.drive, rider.at, rider.ahead, obstacles, tuning.brake, impatient);
         let blocked = bikes_ahead.is_some_and(|slow| slow < target);
         if let Some(slow) = anyone {
             target = target.min(slow);
@@ -691,7 +743,7 @@ mod tests {
         assert!(lit.contains(&Vector3::zeros()) && lit.contains(&Vector3::new(128.0, 0.0, 0.0)));
         // Something standing where a corner's mast goes keeps that junction dark.
         let mut net = Network::from_roads(&grid(5));
-        let (mast, _) = signal_place(Vector3::new(128.0, 0.0, 128.0), 0);
+        let (mast, _) = signal_place(&Tuning::DEFAULT, Vector3::new(128.0, 0.0, 128.0), 0);
         let mut cast = |from: Vector3<f32>, way: Vector3<f32>, reach: f32| {
             let top = if (Vector3::new(from.x, 0.0, from.z) - Vector3::new(mast.x, 0.0, mast.z)).norm() < 0.5 { 3.0 } else { 0.0 };
             (way.y < -0.5 && from.y >= top && from.y - top <= reach).then(|| Vector3::new(from.x, top, from.z))
@@ -707,14 +759,14 @@ mod tests {
         let mut seen = [false; 3];
         for k in 0..(CYCLE * 10.0) as usize {
             let t = k as f32 / 10.0;
-            let (x, z) = (light(0, t), light(1, t));
+            let (x, z) = (light(&Tuning::DEFAULT, 0, t), light(&Tuning::DEFAULT, 1, t));
             assert!(x == Light::Red || z == Light::Red, "both go at {t}");
             seen[match x { Light::Green => 0, Light::Amber => 1, Light::Red => 2 }] = true;
         }
         assert_eq!(seen, [true; 3]);
-        assert_eq!(light(0, 1.0), Light::Green);
-        assert_eq!(light(1, 1.0), Light::Red);
-        assert_eq!(light(1, CYCLE / 2.0 + 1.0), Light::Green);
+        assert_eq!(light(&Tuning::DEFAULT, 0, 1.0), Light::Green);
+        assert_eq!(light(&Tuning::DEFAULT, 1, 1.0), Light::Red);
+        assert_eq!(light(&Tuning::DEFAULT, 1, CYCLE / 2.0 + 1.0), Light::Green);
     }
 
     /// The `n` by `n` grid with every junction lit, all starting their cycles together.

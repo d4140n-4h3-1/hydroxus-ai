@@ -12,6 +12,20 @@ pub const BLIND_FOR: f32 = 3.0;
 pub const BLIND_FIRE_EVERY: (f32, f32) = (0.15, 0.6);
 pub const BLIND_WIDE: f32 = 3.0;
 
+tuning!(
+    /// When and how an NPC fires blind (see the module's constants, its defaults).
+    {
+        /// How many bolts from someone unseen, within how many seconds of each other, set it off.
+        blind_after: u8 = BLIND_AFTER,
+        blind_memory: f32 = BLIND_MEMORY,
+        /// How long it fires blind, in seconds, and how long between its shots, from least to most.
+        blind_for: f32 = BLIND_FOR,
+        blind_fire_every: (f32, f32) = BLIND_FIRE_EVERY,
+        /// How far from where the bolts came from its shots go, in meters, across.
+        blind_wide: f32 = BLIND_WIDE,
+    }
+);
+
 /// An NPC's count of the bolts it has noticed from someone unseen, and its firing blind.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct BlindFire {
@@ -25,11 +39,11 @@ pub struct BlindFire {
 impl BlindFire {
     /// Notes a bolt from `from`, noticed by an armed NPC that does not see who fired it: after
     /// enough, it fires blind back there.
-    pub fn unseen_bolt(&mut self, from: Vector3<f32>) {
+    pub fn unseen_bolt(&mut self, tuning: &Tuning, from: Vector3<f32>) {
         self.unseen = self.unseen.saturating_add(1);
-        self.memory = BLIND_MEMORY;
-        if self.unseen >= BLIND_AFTER {
-            self.firing = Some((from, BLIND_FOR));
+        self.memory = tuning.blind_memory;
+        if self.unseen >= tuning.blind_after {
+            self.firing = Some((from, tuning.blind_for));
         }
     }
 
@@ -59,12 +73,14 @@ impl BlindFire {
     }
 }
 
-/// Where a shot fired blind at `from` goes, picked by `rng`: anywhere within [`BLIND_WIDE`] of it.
-pub fn aim(from: Vector3<f32>, rng: &mut Rng) -> Vector3<f32> {
+/// Where a shot fired blind at `from` goes, picked by `rng`: anywhere within the tuning's
+/// `blind_wide` of it.
+pub fn aim(tuning: &Tuning, from: Vector3<f32>, rng: &mut Rng) -> Vector3<f32> {
+    let wide = tuning.blind_wide;
     from + Vector3::new(
-        between(rng, (-BLIND_WIDE, BLIND_WIDE)),
-        between(rng, (-0.5 * BLIND_WIDE, 0.5 * BLIND_WIDE)),
-        between(rng, (-BLIND_WIDE, BLIND_WIDE)),
+        between(rng, (-wide, wide)),
+        between(rng, (-0.5 * wide, 0.5 * wide)),
+        between(rng, (-wide, wide)),
     )
 }
 
@@ -77,22 +93,22 @@ mod tests {
         let from = Vector3::new(5.0, 0.0, 0.0);
         let mut blind = BlindFire::default();
         for _ in 0..BLIND_AFTER - 1 {
-            blind.unseen_bolt(from);
+            blind.unseen_bolt(&Tuning::DEFAULT, from);
         }
         assert_eq!(blind.at(), None);
         // Too long apart: forgotten.
         blind.step(BLIND_MEMORY + 0.1, false, false);
-        blind.unseen_bolt(from);
+        blind.unseen_bolt(&Tuning::DEFAULT, from);
         assert_eq!(blind.at(), None);
-        blind.unseen_bolt(from);
-        blind.unseen_bolt(from);
+        blind.unseen_bolt(&Tuning::DEFAULT, from);
+        blind.unseen_bolt(&Tuning::DEFAULT, from);
         assert_eq!(blind.at(), Some(from));
         blind.step(BLIND_FOR / 2.0, false, false);
         assert_eq!(blind.at(), Some(from));
         blind.step(BLIND_FOR, false, false);
         assert_eq!(blind.at(), None);
         // Seeing who it is, it stops.
-        (0..BLIND_AFTER).for_each(|_| blind.unseen_bolt(from));
+        (0..BLIND_AFTER).for_each(|_| blind.unseen_bolt(&Tuning::DEFAULT, from));
         blind.step(0.0, true, false);
         assert_eq!(blind.at(), None);
     }
@@ -102,7 +118,7 @@ mod tests {
         let mut rng = Rng::new(7);
         let from = Vector3::new(10.0, 1.0, -4.0);
         for _ in 0..100 {
-            let off = aim(from, &mut rng) - from;
+            let off = aim(&Tuning::DEFAULT, from, &mut rng) - from;
             assert!(off.x.abs() <= BLIND_WIDE && off.z.abs() <= BLIND_WIDE && off.y.abs() <= 0.5 * BLIND_WIDE);
         }
     }

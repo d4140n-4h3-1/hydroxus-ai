@@ -5,7 +5,7 @@
 
 use crate::{
     flat, forward,
-    social::group::about_leader,
+    social::group::{self, about_leader},
     navigation::{
         grid::Rng,
         navmesh::{NavMesh, Poly},
@@ -33,6 +33,23 @@ pub const CROWD_TRIES: usize = 16;
 /// little wider than half of the widest view.
 pub const OUT_OF_VIEW: f32 = 75.0 * std::f32::consts::PI / 180.0;
 
+tuning!(
+    /// How a city's crowd keeps about the player (see the module's constants, its defaults).
+    {
+        /// How far off one has to be to go, and how far off it turns up again, in meters.
+        crowd_gone: f32 = CROWD_GONE,
+        crowd_back: (f32, f32) = CROWD_BACK,
+        /// How often the crowd is looked over, in seconds; how many turn up again at once; how
+        /// long one that turns up stands first, in seconds; and how many spots are tried for it.
+        crowd_every: f32 = CROWD_EVERY,
+        crowd_at_once: usize = CROWD_AT_ONCE,
+        crowd_rest: (f32, f32) = CROWD_REST,
+        crowd_tries: usize = CROWD_TRIES,
+        /// How far off the player's view, in radians, counts as out of it.
+        out_of_view: f32 = OUT_OF_VIEW,
+    }
+);
+
 /// A crowd: where it can turn up, and when it is next looked over.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Crowd {
@@ -41,30 +58,39 @@ pub struct Crowd {
     pub pavement: Vec<bool>,
     /// How long till the crowd is next looked over, in seconds.
     pub next: f32,
+    /// How it keeps about the player.
+    pub tuning: Tuning,
 }
 
 impl Crowd {
     /// A crowd that can turn up where `pavement` says, looked over first in [`CROWD_EVERY`].
     pub fn new(pavement: Vec<bool>) -> Self {
-        Self { pavement, next: CROWD_EVERY }
+        Self::with(pavement, Tuning::DEFAULT)
+    }
+
+    /// A crowd that can turn up where `pavement` says, keeping about the player as `tuning` says.
+    pub fn with(pavement: Vec<bool>, tuning: Tuning) -> Self {
+        Self { pavement, next: tuning.crowd_every, tuning }
     }
 
     /// Somewhere on the floor of `mesh` that one of the crowd could
     /// have walked to, a little way off the `player`'s feet, where `hidden` says the player cannot
     /// see it turn up; and for a group, room for the rest about it, keeping to `slots` of
-    /// [`crate::social::group::ABOUT_LEADER`]: where, which way it faces, and where the rest are.
+    /// the slots about a leader `formation` has (see [`crate::social::group::about_leader`]):
+    /// where, which way it faces, and where the rest are.
     #[allow(clippy::type_complexity)]
     pub fn spot(
         &self,
         mesh: &NavMesh,
         player: Vector3<f32>,
         slots: &[usize],
+        formation: &group::Tuning,
         rng: &mut Rng,
         hidden: impl Fn(Vector3<f32>) -> bool,
     ) -> Option<(Vector3<f32>, f32, Vec<Vector3<f32>>)> {
-        (0..CROWD_TRIES).find_map(|_| {
+        (0..self.tuning.crowd_tries).find_map(|_| {
             let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-            let away = between(rng, CROWD_BACK);
+            let away = between(rng, self.tuning.crowd_back);
             let at = player + forward(angle) * away;
             let pavement = |n: Poly| self.pavement.get(n as usize).copied().unwrap_or(false);
             // The floor at a spot nearest a height, if it is pavement.
@@ -82,7 +108,7 @@ impl Crowd {
             let heading = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
             let about: Option<Vec<Vector3<f32>>> = slots
                 .iter()
-                .map(|&slot| floor(about_leader(feet, heading, slot), feet.y))
+                .map(|&slot| floor(about_leader(formation, feet, heading, slot), feet.y))
                 .collect();
             Some((feet, heading, about?))
         })
@@ -91,9 +117,9 @@ impl Crowd {
 
 /// Whether `at` is off to the side of the view of a player at `player` looking `ahead` along the
 /// ground - out of view whatever is in the way (see [`OUT_OF_VIEW`]).
-pub fn off_view(player: Vector3<f32>, ahead: Option<Vector3<f32>>, at: Vector3<f32>) -> bool {
+pub fn off_view(tuning: &Tuning, player: Vector3<f32>, ahead: Option<Vector3<f32>>, at: Vector3<f32>) -> bool {
     match (ahead, flat(at - player).try_normalize(1.0e-3)) {
-        (Some(ahead), Some(to)) => to.dot(&ahead) < OUT_OF_VIEW.cos(),
+        (Some(ahead), Some(to)) => to.dot(&ahead) < tuning.out_of_view.cos(),
         _ => false,
     }
 }
@@ -117,7 +143,7 @@ mod tests {
         let mut rng = Rng::new(4);
         let mut found = 0;
         for _ in 0..30 {
-            let Some((feet, _, _)) = crowd.spot(&mesh, player, &[], &mut rng, |at| at.z < 100.0) else {
+            let Some((feet, _, _)) = crowd.spot(&mesh, player, &[], &group::Tuning::DEFAULT, &mut rng, |at| at.z < 100.0) else {
                 continue;
             };
             found += 1;
@@ -126,7 +152,7 @@ mod tests {
             assert!(away >= CROWD_BACK.0 - 1.0 && away <= CROWD_BACK.1 + 1.0, "{away}");
         }
         assert!(found > 0);
-        assert!(off_view(player, Some(Vector3::z()), player - Vector3::z() * 10.0));
-        assert!(!off_view(player, Some(Vector3::z()), player + Vector3::z() * 10.0));
+        assert!(off_view(&Tuning::DEFAULT, player, Some(Vector3::z()), player - Vector3::z() * 10.0));
+        assert!(!off_view(&Tuning::DEFAULT, player, Some(Vector3::z()), player + Vector3::z() * 10.0));
     }
 }

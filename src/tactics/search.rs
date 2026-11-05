@@ -22,17 +22,33 @@ use std::collections::HashMap;
 
 /// How much of its chance a polygon keeps each step it spreads, the rest going to its neighbours
 /// - all of the rest, from one no wider than a step; less, the wider it is.
-const KEEP: f32 = 0.2;
+pub const KEEP: f32 = 0.2;
 /// How far one step of spreading goes, in meters.
 const STEP: f32 = 1.0;
 /// How much of the chance goes a little way on, the way they were going, when they are lost, and
 /// how far on, in meters.
-const AHEAD: f32 = 0.6;
-const AHEAD_BY: f32 = 4.0;
+pub const AHEAD: f32 = 0.6;
+pub const AHEAD_BY: f32 = 4.0;
 /// How far, in meters walked, halves how much somewhere is worth searching.
-const HALVED_AFTER: f32 = 20.0;
+pub const HALVED_AFTER: f32 = 20.0;
 /// How far from where they were lost, in meters of walking, the map follows them at most.
-const FOLLOWED: f32 = 250.0;
+pub const FOLLOWED: f32 = 250.0;
+
+tuning!(
+    /// How a search map spreads and is weighed (see the module's constants, its defaults).
+    {
+        /// How much of its chance a polygon keeps each step it spreads.
+        keep: f32 = KEEP,
+        /// How much of the chance goes a little way on, the way they were going, and how far on,
+        /// in meters.
+        ahead: f32 = AHEAD,
+        ahead_by: f32 = AHEAD_BY,
+        /// How far, in meters walked, halves how much somewhere is worth searching.
+        halved_after: f32 = HALVED_AFTER,
+        /// How far from where they were lost the map follows them, in meters of walking.
+        followed: f32 = FOLLOWED,
+    }
+);
 
 /// Where someone lost from sight could be: a chance for every polygon of the navmesh they could
 /// have got to.
@@ -45,6 +61,8 @@ pub struct SearchMap {
     /// How far they could have gone since, and how much of that has not been spread yet.
     gone: f32,
     owed: f32,
+    /// How it spreads and is weighed.
+    tuning: Tuning,
 }
 
 impl SearchMap {
@@ -53,25 +71,35 @@ impl SearchMap {
         Self::default()
     }
 
+    /// A map with nobody lost on it, spreading and weighed as `tuning` says.
+    pub fn with(tuning: Tuning) -> Self {
+        Self { tuning, ..Self::default() }
+    }
+
+    /// How it spreads and is weighed.
+    pub fn tuning(&self) -> &Tuning {
+        &self.tuning
+    }
+
     /// They have just been lost at `at`, going `going` - a way along the ground, if it is known:
     /// they are there, or a little way on that way, on the same floor and in sight of where they
     /// were.
     pub fn lose(&mut self, mesh: &NavMesh, at: Vector3<f32>, going: Option<Vector3<f32>>) {
-        *self = Self::default();
+        *self = Self::with(self.tuning);
         let Some(here) = mesh.nearest(at) else {
             return;
         };
-        self.from_lost = mesh.costs_from(at, FOLLOWED, |_| 0.0);
+        self.from_lost = mesh.costs_from(at, self.tuning.followed, |_| 0.0);
         self.from_lost.insert(here, 0.0);
         let ahead = going
             .and_then(|going| Vector3::new(going.x, 0.0, going.z).try_normalize(1.0e-3))
-            .map(|way| at + way * AHEAD_BY)
+            .map(|way| at + way * self.tuning.ahead_by)
             .filter(|&ahead| mesh.sees_across(at, ahead))
             .and_then(|ahead| mesh.poly_at(ahead));
         match ahead {
             Some(ahead) => {
-                *self.chance.entry(ahead).or_default() += AHEAD;
-                *self.chance.entry(here).or_default() += 1.0 - AHEAD;
+                *self.chance.entry(ahead).or_default() += self.tuning.ahead;
+                *self.chance.entry(here).or_default() += 1.0 - self.tuning.ahead;
             }
             None => {
                 self.chance.insert(here, 1.0);
@@ -121,7 +149,7 @@ impl SearchMap {
                 continue;
             }
             let across = mesh.area_of(n).sqrt().max(STEP);
-            let leaving = chance * (1.0 - KEEP) * (STEP / across).min(1.0);
+            let leaving = chance * (1.0 - self.tuning.keep) * (STEP / across).min(1.0);
             *self.chance.entry(n).or_default() += chance - leaving;
             for (to, w) in open {
                 *self.chance.entry(to).or_default() += leaving * w / width;
@@ -197,7 +225,7 @@ impl SearchMap {
             if around <= 1.0e-6 {
                 continue;
             }
-            let worth = around / (1.0 + cost / HALVED_AFTER);
+            let worth = around / (1.0 + cost / self.tuning.halved_after);
             if best.is_none_or(|(b, _)| worth > b) {
                 best = Some((worth, at));
             }

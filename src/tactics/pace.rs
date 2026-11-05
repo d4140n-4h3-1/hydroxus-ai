@@ -15,10 +15,25 @@ pub const SPRINT_RESERVE: f32 = 0.5;
 pub const EASE_OFF: f32 = 0.2;
 pub const EASED: f32 = 0.6;
 
+tuning!(
+    /// How an NPC paces a chase (see the module's constants, its defaults).
+    {
+        /// How long it runs before it breaks into a sprint, and how long each sprint lasts, in
+        /// seconds, from least to most.
+        sprint_every: (f32, f32) = SPRINT_EVERY,
+        sprint_for: (f32, f32) = SPRINT_FOR,
+        /// By the share of its breath left: under which it sprints no more, under which it eases
+        /// off to a jog, and over which it is back to running.
+        sprint_reserve: f32 = SPRINT_RESERVE,
+        ease_off: f32 = EASE_OFF,
+        eased: f32 = EASED,
+    }
+);
+
 /// How long until an NPC sprints, `sprint_in` - below 0 before it has been picked - and how
 /// long it has left `sprinting`, after another `dt` of `chasing` someone or not: a sprint comes
 /// some while into a chase, never at its start, and again some while after each ends.
-pub fn sprints(sprint_in: f32, sprinting: f32, chasing: bool, rng: &mut Rng, dt: f32) -> (f32, f32) {
+pub fn sprints(tuning: &Tuning, sprint_in: f32, sprinting: f32, chasing: bool, rng: &mut Rng, dt: f32) -> (f32, f32) {
     if !chasing {
         return (-1.0, 0.0);
     }
@@ -26,10 +41,10 @@ pub fn sprints(sprint_in: f32, sprinting: f32, chasing: bool, rng: &mut Rng, dt:
         return (sprint_in, sprinting - dt);
     }
     if sprint_in < 0.0 {
-        return (between(rng, SPRINT_EVERY), 0.0);
+        return (between(rng, tuning.sprint_every), 0.0);
     }
     match sprint_in - dt {
-        due if due <= 0.0 => (between(rng, SPRINT_EVERY), between(rng, SPRINT_FOR)),
+        due if due <= 0.0 => (between(rng, tuning.sprint_every), between(rng, tuning.sprint_for)),
         due => (due, 0.0),
     }
 }
@@ -37,9 +52,9 @@ pub fn sprints(sprint_in: f32, sprinting: f32, chasing: bool, rng: &mut Rng, dt:
 /// Whether one `pacing` itself - with no one near enough for a last burst - eases off to a jog,
 /// having been `easing` or not, with `left` of its breath, as a share of its most; and whether
 /// it keeps from sprinting (see [`SPRINT_RESERVE`]).
-pub fn pace(pacing: bool, easing: bool, left: f32) -> (bool, bool) {
-    let ease_under = if easing { EASED } else { EASE_OFF };
-    (pacing && left < ease_under, pacing && left < SPRINT_RESERVE)
+pub fn pace(tuning: &Tuning, pacing: bool, easing: bool, left: f32) -> (bool, bool) {
+    let ease_under = if easing { tuning.eased } else { tuning.ease_off };
+    (pacing && left < ease_under, pacing && left < tuning.sprint_reserve)
 }
 
 #[cfg(test)]
@@ -55,7 +70,7 @@ mod tests {
         let mut sprints_begun = 0;
         for frame in 0..(60.0 / dt) as u32 {
             let was = sprinting > 0.0;
-            (sprint_in, sprinting) = sprints(sprint_in, sprinting, true, &mut rng, dt);
+            (sprint_in, sprinting) = sprints(&Tuning::DEFAULT, sprint_in, sprinting, true, &mut rng, dt);
             if !was && sprinting > 0.0 {
                 sprints_begun += 1;
                 first.get_or_insert(frame as f32 * dt);
@@ -65,20 +80,20 @@ mod tests {
         assert!(first >= SPRINT_EVERY.0 - dt, "not straight away: {first}");
         assert!(sprints_begun >= 3, "again and again: {sprints_begun}");
         // No longer chasing, it forgets, and starts over when it chases again.
-        assert_eq!(sprints(2.0, 1.0, false, &mut rng, dt), (-1.0, 0.0));
+        assert_eq!(sprints(&Tuning::DEFAULT, 2.0, 1.0, false, &mut rng, dt), (-1.0, 0.0));
     }
 
     #[test]
     fn one_pacing_itself_keeps_its_breath_for_a_last_burst() {
         // Plenty of breath: it sprints and runs as it likes.
-        assert_eq!(pace(true, false, 0.9), (false, false));
+        assert_eq!(pace(&Tuning::DEFAULT, true, false, 0.9), (false, false));
         // Under its reserve it sprints no more, but runs on.
-        assert_eq!(pace(true, false, 0.4), (false, true));
+        assert_eq!(pace(&Tuning::DEFAULT, true, false, 0.4), (false, true));
         // Low, it eases off to a jog, and keeps to it until well back over that.
-        assert_eq!(pace(true, false, 0.15), (true, true));
-        assert_eq!(pace(true, true, 0.4), (true, true));
-        assert_eq!(pace(true, true, 0.65), (false, false));
+        assert_eq!(pace(&Tuning::DEFAULT, true, false, 0.15), (true, true));
+        assert_eq!(pace(&Tuning::DEFAULT, true, true, 0.4), (true, true));
+        assert_eq!(pace(&Tuning::DEFAULT, true, true, 0.65), (false, false));
         // Near enough to catch them, or not pacing itself, it spends all it has.
-        assert_eq!(pace(false, true, 0.1), (false, false));
+        assert_eq!(pace(&Tuning::DEFAULT, false, true, 0.1), (false, false));
     }
 }

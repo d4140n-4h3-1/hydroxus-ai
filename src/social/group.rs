@@ -8,6 +8,17 @@ use nalgebra::Vector3;
 /// How far behind the one leading it one of its group can fall, in meters, before it waits for it.
 pub const WAIT_FOR: f32 = 6.0;
 
+tuning!(
+    /// How a group keeps together (see the module's constants, its defaults).
+    {
+        /// How far behind its leader one falls before the leader waits for it, in meters.
+        wait_for: f32 = WAIT_FOR,
+        /// Where each of the rest keeps about the one leading it, in meters: to its right (less
+        /// than nothing, its left) and behind it.
+        about_leader: [(f32, f32); 5] = ABOUT_LEADER,
+    }
+);
+
 /// An NPC's part in a pair or group: the one it keeps about - or, leading, one of those keeping
 /// about it - whether it leads, and where about the one leading it it keeps (see
 /// [`ABOUT_LEADER`]).
@@ -178,8 +189,8 @@ pub fn size(most: usize, rng: &mut Rng) -> usize {
 
 /// Whether the one leading a group waits for one of it at `feet` - `about`, going about its
 /// business, but `held` up, talking, say, or fallen [`WAIT_FOR`] behind the leader at `leader`.
-pub fn waits_for(leader: Vector3<f32>, feet: Vector3<f32>, about: bool, held: bool) -> bool {
-    about && (held || flat(feet - leader).norm() > WAIT_FOR)
+pub fn waits_for(tuning: &Tuning, leader: Vector3<f32>, feet: Vector3<f32>, about: bool, held: bool) -> bool {
+    about && (held || flat(feet - leader).norm() > tuning.wait_for)
 }
 
 /// A pair walking about together: how far to its partner's right the one keeping beside it walks,
@@ -198,8 +209,8 @@ pub const ABOUT_LEADER: [(f32, f32); 5] = [
 
 /// Where the one keeping to `slot` of [`ABOUT_LEADER`] stands, about a leader at `feet` facing
 /// `heading`.
-pub fn about_leader(feet: Vector3<f32>, heading: f32, slot: usize) -> Vector3<f32> {
-    let (right, behind) = ABOUT_LEADER[slot.min(ABOUT_LEADER.len() - 1)];
+pub fn about_leader(tuning: &Tuning, feet: Vector3<f32>, heading: f32, slot: usize) -> Vector3<f32> {
+    let (right, behind) = tuning.about_leader[slot.min(ABOUT_LEADER.len() - 1)];
     feet + right_of(heading) * right - forward(heading) * behind
 }
 
@@ -217,7 +228,7 @@ mod tests {
 
     #[test]
     fn a_pair_walks_on_the_right_a_step_behind_and_a_group_fans_out_behind() {
-        let at = |slot| about_leader(Vector3::zeros(), 0.0, slot);
+        let at = |slot| about_leader(&Tuning::DEFAULT, Vector3::zeros(), 0.0, slot);
         // Facing +z, the right is -x.
         assert!(at(0).x < 0.0 && at(0).z < 0.0, "{:?}", at(0));
         assert!(at(1).x > 0.0, "the next on the left");
@@ -259,9 +270,9 @@ mod tests {
         assert_eq!(size(1, &mut rng), 1);
         assert!((0..50).all(|_| size(40, &mut rng) <= ABOUT_LEADER.len() + 1));
         let leader = Vector3::zeros();
-        assert!(waits_for(leader, Vector3::new(WAIT_FOR + 1.0, 0.0, 0.0), true, false));
-        assert!(waits_for(leader, Vector3::new(1.0, 0.0, 0.0), true, true));
-        assert!(!waits_for(leader, Vector3::new(1.0, 0.0, 0.0), true, false));
-        assert!(!waits_for(leader, Vector3::new(WAIT_FOR + 1.0, 0.0, 0.0), false, true));
+        assert!(waits_for(&Tuning::DEFAULT, leader, Vector3::new(WAIT_FOR + 1.0, 0.0, 0.0), true, false));
+        assert!(waits_for(&Tuning::DEFAULT, leader, Vector3::new(1.0, 0.0, 0.0), true, true));
+        assert!(!waits_for(&Tuning::DEFAULT, leader, Vector3::new(1.0, 0.0, 0.0), true, false));
+        assert!(!waits_for(&Tuning::DEFAULT, leader, Vector3::new(WAIT_FOR + 1.0, 0.0, 0.0), false, true));
     }
 }

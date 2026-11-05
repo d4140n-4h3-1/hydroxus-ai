@@ -84,6 +84,42 @@ let behind = nalgebra::Vector3::new(0.0, 0.0, -10.0);
 assert!(!sight.could_see(Some(Alert::Evasion), nalgebra::Vector3::zeros(), 0.0, behind, Stance::Crouching, false));
 ```
 
+## Tuning
+
+Every number the crate's behaviour turns on - how far an NPC sees, how long it searches, how
+near it comes before it shoots, how wide a lane is, how long a light stays green - is a field of
+its module's `Tuning`, whose `DEFAULT` is the module's documented constants (Maze's). The
+crate-wide `hydroxus_ai::Tuning` holds every module's, so a game keeps one and hands each module
+its part:
+
+```rust
+let mut ai = hydroxus_ai::Tuning::DEFAULT;
+ai.patrol.engage = 15.0; // drones hang back further
+ai.alert.caution = 90.0; // and stay wary longer
+let to = hydroxus_ai::tactics::chase::cut_off(&ai.chase, them, going, away, nearest, floor_at);
+```
+
+Those that keep their numbers with them take them as they are made: a `WalkGrid` its ground
+(`with_tuning`), a `NavMesh` how it is made and walked (`build_with`, `walk`), a traffic
+`Network` its layout, lights and driving (`from_roads_with`), a `Patrol`, a `SearchMap`, a
+`Crowd`, a report `Witness`. With the `serde` feature the whole of it can be read from a file;
+anything the file leaves out takes its default:
+
+```toml
+hydroxus-ai = { git = "https://github.com/d4140n-4h3-1/hydroxus-ai.git", branch = "main", features = ["serde"] }
+```
+
+```json
+{ "patrol": { "engage": 15.0 }, "alert": { "caution": 90.0 } }
+```
+
+## Events
+
+The crate does not choose what an NPC says. What came of what it did is an event - a sentry's
+`tactics::patrol::Event` (`Spotted`, `Searching`, `Alarmed`, `Calm`), a witness's
+`social::report::Telling`, a ride's `navigation::ride::Rides`, a threat's `tactics::threat::Threat`
+- and the game maps it to its own lines, sounds or UI.
+
 ## License
 
 MIT - see `LICENSE`.

@@ -12,6 +12,16 @@
 pub const EVASION: f32 = 30.0;
 pub const CAUTION: f32 = 60.0;
 
+tuning!(
+    /// How long the phases last, in seconds, once the player is out of sight.
+    {
+        /// Searching, once it has lost them.
+        evasion: f32 = EVASION,
+        /// Wary, once it has given up searching.
+        caution: f32 = CAUTION,
+    }
+);
+
 /// How a hostile NPC is going about the player, least urgent first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Alert {
@@ -38,11 +48,11 @@ impl Alert {
 
     /// How long this phase lasts, in seconds, once the player is out of sight: none for Alert,
     /// which lasts as long as they are in sight.
-    pub fn lasts(self) -> Option<f32> {
+    pub fn lasts(self, tuning: &Tuning) -> Option<f32> {
         match self {
             Alert::Alert => None,
-            Alert::Evasion => Some(EVASION),
-            Alert::Caution => Some(CAUTION),
+            Alert::Evasion => Some(tuning.evasion),
+            Alert::Caution => Some(tuning.caution),
         }
     }
 }

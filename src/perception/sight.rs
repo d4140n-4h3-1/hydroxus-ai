@@ -25,8 +25,10 @@ pub enum Stance {
     Crawling,
 }
 
-/// How an NPC sees.
+/// How an NPC sees: its tuning, as the other modules' [`Tuning`](crate::Tuning)s are.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct Sight {
     /// How far off it sees, in meters, at most.
     pub range: f32,
@@ -44,17 +46,22 @@ pub struct Sight {
     pub dark: f32,
 }
 
+impl Sight {
+    /// How an NPC sees unless the game says otherwise.
+    pub const DEFAULT: Self = Self {
+        range: 30.0,
+        cone: 55.0f32.to_radians(),
+        side: 100.0f32.to_radians(),
+        peripheral: 0.35,
+        crouched: 0.5,
+        crawling: 0.3,
+        dark: 0.35,
+    };
+}
+
 impl Default for Sight {
     fn default() -> Self {
-        Self {
-            range: 30.0,
-            cone: 55.0f32.to_radians(),
-            side: 100.0f32.to_radians(),
-            peripheral: 0.35,
-            crouched: 0.5,
-            crawling: 0.3,
-            dark: 0.35,
-        }
+        Self::DEFAULT
     }
 }
 

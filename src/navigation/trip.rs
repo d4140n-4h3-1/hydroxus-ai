@@ -11,7 +11,6 @@
 //! rides it across, gets off at the other end while it waits there, and walks on (see [`Trip`]).
 
 use crate::navigation::{
-    grid::MAX_CLIMB,
     navmesh::NavMesh,
     walk::{self, route_to},
 };
@@ -45,19 +44,36 @@ impl Crossing {
 
 pub use walk::NEAR;
 /// How fast an NPC gets about, for weighing a walk against a ferry, in meters per second.
-const PACE: f32 = 2.0;
+pub const PACE: f32 = 2.0;
 /// How much quicker the ferry has to be than walking for an NPC to take it, in seconds: waiting
 /// about at the dock, it could be on its way.
-const BETTER_BY: f32 = 5.0;
+pub const BETTER_BY: f32 = 5.0;
 /// How near the dock an NPC has to be to wait there, and how near the middle of the deck to be
 /// aboard, in meters.
-const AT_DOCK: f32 = 1.2;
-const ABOARD: f32 = 0.9;
+pub const AT_DOCK: f32 = 1.2;
+pub const ABOARD: f32 = 0.9;
 /// How fast an NPC gets on and off a ferry, at least, in meters per second - it hurries - and how
 /// long the ferry has to go on waiting for it, on top of the time that takes, for it to set off
 /// to get on, in seconds.
-const BOARDING_PACE: f32 = 1.0;
-const TIME_TO_SPARE: f32 = 1.0;
+pub const BOARDING_PACE: f32 = 1.0;
+pub const TIME_TO_SPARE: f32 = 1.0;
+
+tuning!(
+    /// How an NPC weighs and takes a ferry (see the module's constants, its defaults).
+    {
+        /// How fast it gets about, in meters per second, and how much quicker, in seconds, the
+        /// ferry has to be than walking.
+        pace: f32 = PACE,
+        better_by: f32 = BETTER_BY,
+        /// How near the dock it waits, and how near the middle of the deck is aboard, in meters.
+        at_dock: f32 = AT_DOCK,
+        aboard: f32 = ABOARD,
+        /// How fast it gets on and off, in meters per second, and how long the ferry has to go on
+        /// waiting on top of that, in seconds.
+        boarding_pace: f32 = BOARDING_PACE,
+        time_to_spare: f32 = TIME_TO_SPARE,
+    }
+);
 
 /// The walkable floor nearest `point`, within [`NEAR`], at its height: where it is if there is
 /// floor there at its height, or else the nearest point that is. None with no floor at its height
@@ -92,6 +108,8 @@ pub struct Trip {
     docks: [Vector3<f32>; 2],
     /// Where it is going, once across.
     pub to: Vector3<f32>,
+    /// How it goes about it.
+    tuning: Tuning,
 }
 
 /// Where an NPC waits at each end of `crossing`: the floor beside where it waits, at its height.
@@ -109,6 +127,7 @@ fn docks(mesh: &NavMesh, crossing: &Crossing) -> Option<[Vector3<f32>; 2]> {
 /// as the way as the crow flies is taken without weighing the ferries at all, as none of them
 /// could get there sooner by [`BETTER_BY`].
 pub fn go_to(
+    tuning: &Tuning,
     mesh: &NavMesh,
     feet: Vector3<f32>,
     to: Vector3<f32>,
@@ -120,14 +139,15 @@ pub fn go_to(
     if crossings.is_empty() {
         return (walk, None);
     }
-    let walking = (!walk.is_empty()).then(|| length(feet, &walk) / PACE);
-    if walking.is_some_and(|walking| walking <= flat_distance(to - feet) / PACE + BETTER_BY) {
+    let (pace, better_by) = (tuning.pace, tuning.better_by);
+    let walking = (!walk.is_empty()).then(|| length(feet, &walk) / pace);
+    if walking.is_some_and(|walking| walking <= flat_distance(to - feet) / pace + better_by) {
         return (walk, None);
     }
     // How long a walk from `a` to `b` takes, in seconds, if there is one within `reach`.
     let leg = |a: Vector3<f32>, b: Vector3<f32>| {
         let route = route_to(mesh, a, b, reach);
-        (!route.is_empty()).then(|| length(a, &route) / PACE)
+        (!route.is_empty()).then(|| length(a, &route) / pace)
     };
     let mut best: Option<(f32, Trip)> = None;
     for (ferry, crossing) in crossings.iter().enumerate() {
@@ -136,8 +156,8 @@ pub fn go_to(
         };
         for from in 0..2 {
             // Not worth the walks to find out, if the crossing alone is no quicker.
-            let least = (flat_distance(docks[from] - feet) + flat_distance(to - docks[1 - from])) / PACE + 0.5 * crossing.longest;
-            if walking.is_some_and(|walking| least + BETTER_BY >= walking) || best.is_some_and(|(quickest, _)| least >= quickest) {
+            let least = (flat_distance(docks[from] - feet) + flat_distance(to - docks[1 - from])) / pace + 0.5 * crossing.longest;
+            if walking.is_some_and(|walking| least + better_by >= walking) || best.is_some_and(|(quickest, _)| least >= quickest) {
                 continue;
             }
             let (Some(there), Some(on)) = (leg(feet, docks[from]), leg(docks[1 - from], to)) else {
@@ -146,14 +166,14 @@ pub fn go_to(
             // Half the longest it could be, on average.
             let time = there + 0.5 * crossing.longest + on;
             if best.is_none_or(|(quickest, _)| time < quickest) {
-                best = Some((time, Trip { ferry, from, stage: Stage::ToDock, docks, to }));
+                best = Some((time, Trip { ferry, from, stage: Stage::ToDock, docks, to, tuning: *tuning }));
             }
         }
     }
     match best {
-        Some((time, trip)) if walking.is_none_or(|walking| time + BETTER_BY < walking) => {
+        Some((time, trip)) if walking.is_none_or(|walking| time + better_by < walking) => {
             let route = route_to(mesh, feet, trip.docks[trip.from], reach);
-            if route.is_empty() && flat_distance(feet - trip.docks[trip.from]) > AT_DOCK {
+            if route.is_empty() && flat_distance(feet - trip.docks[trip.from]) > tuning.at_dock {
                 (walk, None)
             } else {
                 (route, Some(trip))
@@ -203,7 +223,7 @@ impl Trip {
         let aboard = crossing.carries(feet);
         match self.stage {
             Stage::ToDock => {
-                if flat_distance(feet - self.docks[self.from]) < AT_DOCK {
+                if flat_distance(feet - self.docks[self.from]) < self.tuning.at_dock {
                     self.stage = Stage::Waiting;
                     Doing::Go(Vec::new())
                 } else if route.is_empty() {
@@ -213,7 +233,7 @@ impl Trip {
                 }
             }
             Stage::Waiting => {
-                let boarding = flat_distance(crossing.deck - feet) / BOARDING_PACE + TIME_TO_SPARE;
+                let boarding = flat_distance(crossing.deck - feet) / self.tuning.boarding_pace + self.tuning.time_to_spare;
                 if waiting_at(self.from).is_some_and(|left| left > boarding) {
                     self.stage = Stage::Boarding;
                     Doing::Go(vec![crossing.deck])
@@ -222,7 +242,7 @@ impl Trip {
                 }
             }
             Stage::Boarding => {
-                if aboard && flat_distance(feet - crossing.deck) < ABOARD {
+                if aboard && flat_distance(feet - crossing.deck) < self.tuning.aboard {
                     self.stage = Stage::Riding;
                     Doing::Go(Vec::new())
                 } else if waiting_at(self.from).is_none() && !aboard {
@@ -242,7 +262,7 @@ impl Trip {
                 }
             }
             Stage::Leaving => {
-                if !aboard && flat_distance(feet - self.docks[other]) < AT_DOCK {
+                if !aboard && flat_distance(feet - self.docks[other]) < self.tuning.at_dock {
                     Doing::Across
                 } else if aboard && waiting_at(other).is_none() {
                     // Not off in time: round again.
@@ -273,7 +293,7 @@ pub fn can_step(mesh: &NavMesh, from: Vector3<f32>, to: Vector3<f32>) -> bool {
     match (mesh.poly_at(from), mesh.poly_at(to)) {
         (_, None) => false,
         (None, Some(_)) => true,
-        (Some(here), Some(there)) => here == there || (mesh.floor_of(there) - mesh.floor_of(here)).abs() <= MAX_CLIMB,
+        (Some(here), Some(there)) => here == there || (mesh.floor_of(there) - mesh.floor_of(here)).abs() <= mesh.ground.max_climb,
     }
 }
 
@@ -345,12 +365,12 @@ mod tests {
     #[test]
     fn with_no_way_round_it_takes_the_ferry() {
         let (grid, crossing) = islands();
-        let (route, trip) = go_to(&mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&Tuning::DEFAULT, &mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
         let trip = trip.expect("by ferry");
         assert_eq!((trip.from, trip.stage), (0, Stage::ToDock));
         assert!(route.first().is_some_and(|end| end.x < 2.0), "to the dock: {route:?}");
         // And not for anywhere it can walk to.
-        let (_, trip) = go_to(&mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(1.5, 0.0, 0.5), f32::INFINITY, &[crossing]);
+        let (_, trip) = go_to(&Tuning::DEFAULT, &mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(1.5, 0.0, 0.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none());
     }
 
@@ -373,20 +393,20 @@ mod tests {
         };
         let at = |x: f32, z: f32| Vector3::new(x, 0.0, z);
         // Across from near the ferry: by ferry, rather than a hundred meters round the end.
-        let (route, trip) = go_to(&mesh(&grid), at(10.5, 3.5), at(10.5, 17.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&Tuning::DEFAULT, &mesh(&grid), at(10.5, 3.5), at(10.5, 17.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_some_and(|trip| trip.from == 0), "by ferry: {route:?}");
         // Along its own bank: walking, the ferries not weighed.
-        let (route, trip) = go_to(&mesh(&grid), at(10.5, 3.5), at(40.5, 3.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&Tuning::DEFAULT, &mesh(&grid), at(10.5, 3.5), at(40.5, 3.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none() && !route.is_empty());
         // Across near the end, where the walk round is short: walking.
-        let (route, trip) = go_to(&mesh(&grid), at(52.5, 3.5), at(52.5, 17.5), f32::INFINITY, &[crossing]);
+        let (route, trip) = go_to(&Tuning::DEFAULT, &mesh(&grid), at(52.5, 3.5), at(52.5, 17.5), f32::INFINITY, &[crossing]);
         assert!(trip.is_none() && !route.is_empty(), "round the end");
     }
 
     #[test]
     fn it_waits_gets_on_rides_and_gets_off() {
         let (grid, mut crossing) = islands();
-        let (_, trip) = go_to(&mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
+        let (_, trip) = go_to(&Tuning::DEFAULT, &mesh(&grid), Vector3::new(0.5, 0.0, 1.5), Vector3::new(9.5, 0.0, 1.5), f32::INFINITY, &[crossing]);
         let mut trip = trip.unwrap();
         // At the dock, the ferry about to go: it waits.
         let dock = Vector3::new(1.5, 0.0, 1.5);
