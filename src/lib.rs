@@ -10,7 +10,9 @@
 //!   joining a chase ([`tactics::join`]), pacing itself ([`tactics::pace`]), cutting off and
 //!   running ([`tactics::chase`]), answering a weapon pointed at it ([`tactics::threat`]),
 //!   shooting ([`tactics::fire`]) and firing blind ([`tactics::blind`]), and taking cover
-//!   ([`tactics::cover`]); and fighting as a team ([`tactics::team`]).
+//!   ([`tactics::cover`]); fighting as a team ([`tactics::team`]); a flying sentry's patrol
+//!   ([`tactics::patrol`]); and utility scoring, choosing between what an NPC could do
+//!   ([`tactics::utility`]).
 //! - [`navigation`]: getting about - the walk grid ([`navigation::grid`]) and what can be got to
 //!   on it ([`navigation::reach`]), routes over it ([`navigation::route`]), going about one's
 //!   business in a city ([`navigation::wander`]), over floors and by ferry

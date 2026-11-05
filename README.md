@@ -33,7 +33,8 @@ It is in four folders, and its alert phases besides.
 | `blind` | Shot at by someone it cannot see, firing blind back where the shots came from, as Fallout's NPCs do. |
 | `cover` | A bystander running from a shooting to somewhere it cannot be seen from. |
 | `team` | Fighting as a team: sightings shared, targets picked and kept, the ground the enemy sees kept out of, cover ranked, flanking, sidestepping, moving only under covering fire, and noticing when it is stuck. |
-| `patrol` | A flying sentry - a security drone: patrolling from spot to spot or round a post, searching where the player was and the spots round it, coming on to its range on Alert and facing them ready to fire, and calm again once its search runs out; flying along its route, hovering over the floor or free through the air, never into anyone. |
+| `patrol` | A flying sentry - a security drone: patrolling from spot to spot or round a post, searching where the player was and the spots round it, coming on to its range on Alert and facing them ready to fire, and calm again once its search runs out; flying along its route, hovering over the floor or free through the air, never into anyone. Which it does is chosen by utility scoring, weighed its own way if a game likes. |
+| `utility` | Utility scoring: each thing an NPC could do weighed against what it takes in - inputs through response curves (step, linear, logistic), multiplied and made up for their number - the best taken, with a little inertia so it does not flicker, and what each scored kept to show why. Plain data, so it can be read from a file. |
 
 ### `navigation` - getting about
 

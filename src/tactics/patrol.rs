@@ -12,12 +12,21 @@
 //!   searches where it last saw them.
 //! - **Down**: brought down, it thinks no more.
 //!
+//! Which of the three it is doing is chosen by utility scoring (see [`crate::tactics::utility`]):
+//! its [`Patrol::reasoner`] weighs engaging, searching and patrolling against what it takes in
+//! ([`Input`]) - whether it sees the player, how long it has left to search, how far off they
+//! are. Its default ([`reasoner`]) chooses as the phases above say; a game can weigh them its own
+//! way - a drone that leaves a player too far off alone, say - and see what each scored.
+//!
 //! The game says what it sees, finds its ways ([`Ways`]) and what is round it as it flies
 //! ([`Air`]), and moves its body, plays its animations and fires; this decides where it goes, and
 //! tells the game what came of it ([`Event`]) - for it to say, play or show as it likes. How far
 //! and how long it does each is its [`Tuning`].
 
-use crate::flat;
+use crate::{
+    flat,
+    tactics::utility::{Action, Curve, Reasoner, Situation},
+};
 use nalgebra::Vector3;
 
 /// How long it searches once it has lost the player, or been sent to look for them, in seconds.
@@ -67,6 +76,70 @@ tuning!(
         floor_easing: f32 = FLOOR_EASING,
     }
 );
+
+/// What a sentry can choose to do: what [`State`] it goes about the player in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Mode {
+    /// Come on to the player and fire: [`State::Alert`].
+    Engage,
+    /// Look for them: [`State::Search`].
+    Search,
+    /// Go about its patrol: [`State::Patrol`].
+    Patrol,
+}
+
+/// What a sentry takes in, for its reasoner to weigh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Input {
+    /// 1 if it sees the player, 0 if not.
+    Sees,
+    /// How long it has left to search, in seconds: what it has left searching; all of it
+    /// ([`Tuning::search`]), on Alert, were it to lose them; nothing, calm.
+    SearchLeft,
+    /// How far off the player is along the ground, in meters, if it sees them; 10 km if not.
+    Distance,
+    /// How many spots it has searched since it lost them.
+    Searched,
+    /// 1 if it keeps a post, 0 if not.
+    Post,
+}
+
+/// A sentry's situation, as its reasoner reads it (see [`Input`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reading {
+    pub sees: bool,
+    pub search_left: f32,
+    pub distance: f32,
+    pub searched: u32,
+    pub post: bool,
+}
+
+impl Situation<Input> for Reading {
+    fn input(&self, input: Input) -> f32 {
+        match input {
+            Input::Sees => f32::from(u8::from(self.sees)),
+            Input::SearchLeft => self.search_left,
+            Input::Distance => self.distance,
+            Input::Searched => self.searched as f32,
+            Input::Post => f32::from(u8::from(self.post)),
+        }
+    }
+}
+
+/// A sentry's reasoner as Metal Gear's phases have it: on Alert while it sees the player, searching
+/// while it has time left to - having lost them, or been sent - and otherwise patrolling.
+pub fn reasoner() -> Reasoner<Mode, Input> {
+    Reasoner::new(
+        vec![
+            Action::new(Mode::Engage, 1.0).when(Input::Sees, Curve::Above { at: 0.5 }),
+            Action::new(Mode::Search, 0.6).when(Input::SearchLeft, Curve::Above { at: 0.0 }),
+            Action::new(Mode::Patrol, 0.2),
+        ],
+        0.1,
+    )
+}
 
 /// What came of what a sentry did, for the game to say, play or show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -165,6 +238,8 @@ pub struct Patrol {
     pub scan_for: f32,
     /// How far and how long it does each thing.
     pub tuning: Tuning,
+    /// How it chooses what to do, and what each choice last scored (see [`reasoner`]).
+    pub reasoner: Reasoner<Mode, Input>,
 }
 
 impl Patrol {
@@ -191,6 +266,7 @@ impl Patrol {
             speeds,
             scan_for,
             tuning: Tuning::DEFAULT,
+            reasoner: reasoner(),
         }
     }
 
@@ -281,21 +357,59 @@ impl Patrol {
     }
 
     /// Takes in what it `sees` - whether it can see the player, whose feet are at `player`, if it
-    /// looked (see [`Patrol::looks`]) - and decides where to go, finding its `ways`, for another
-    /// `dt`. What it has to say, if anything.
+    /// looked (see [`Patrol::looks`]) - chooses what to do about it (see [`Patrol::reasoner`]), and
+    /// decides where to go, finding its `ways`, for another `dt`. What it has to say, if anything.
     pub fn think(&mut self, sees: bool, player: Vector3<f32>, ways: &mut dyn Ways, dt: f32) -> Option<Event> {
         let under = self.under();
         let tuning = self.tuning;
-        match self.state {
-            State::Down => None,
-            State::Patrol | State::Search { .. } if sees => {
+        let current = match self.state {
+            State::Down => return None,
+            State::Alert => Mode::Engage,
+            State::Search { .. } => Mode::Search,
+            State::Patrol => Mode::Patrol,
+        };
+        // How long it has left to search, before it chooses: its time runs from when it gets to
+        // where it was sent, not while it is on its way.
+        let search_left = match self.state {
+            State::Search { left } => {
+                let on_its_way = self.searched <= 1 && self.scanning == 0.0 && !self.route.is_empty();
+                if on_its_way { left } else { left - dt }
+            }
+            State::Alert => tuning.search,
+            _ => 0.0,
+        };
+        let reading = Reading {
+            sees,
+            search_left,
+            distance: if sees { flat(player - under).norm() } else { 1.0e4 },
+            searched: self.searched,
+            post: self.post.is_some(),
+        };
+        let mode = self.reasoner.choose(&reading, Some(current)).unwrap_or(current);
+        match (current, mode) {
+            // Seeing the player, on to them.
+            (Mode::Patrol | Mode::Search, Mode::Engage) => {
                 self.state = State::Alert;
                 self.fire_in = tuning.first_shot;
                 self.replan = 0.0;
                 self.scanning = 0.0;
                 Some(Event::Spotted)
             }
-            State::Patrol => {
+            // Lost them: it searches where it last saw them.
+            (Mode::Engage | Mode::Patrol, Mode::Search) => {
+                let at = self.lost_at;
+                self.search(at);
+                Some(Event::Searching)
+            }
+            // Done searching, or giving up on them: calm again.
+            (Mode::Search | Mode::Engage, Mode::Patrol) => {
+                self.state = State::Patrol;
+                self.route.clear();
+                self.scanning = 0.0;
+                self.resting = tuning.rest.0;
+                Some(Event::Calm)
+            }
+            (_, Mode::Patrol) => {
                 if self.route.is_empty() {
                     self.resting -= dt;
                     if self.resting <= 0.0 {
@@ -312,12 +426,7 @@ impl Patrol {
                 }
                 None
             }
-            State::Alert if !sees => {
-                let at = self.lost_at;
-                self.search(at);
-                Some(Event::Searching)
-            }
-            State::Alert => {
+            (_, Mode::Engage) => {
                 self.lost_at = player;
                 self.fire_in -= dt;
                 // Facing them, coming on to within its range of them, and no nearer.
@@ -342,18 +451,8 @@ impl Patrol {
                 }
                 None
             }
-            State::Search { left } => {
-                // Its time runs from when it gets to where it was sent, not while it is on its way.
-                let on_its_way = self.searched <= 1 && self.scanning == 0.0 && !self.route.is_empty();
-                let left = if on_its_way { left } else { left - dt };
-                if left <= 0.0 {
-                    self.state = State::Patrol;
-                    self.route.clear();
-                    self.scanning = 0.0;
-                    self.resting = tuning.rest.0;
-                    return Some(Event::Calm);
-                }
-                self.state = State::Search { left };
+            (_, Mode::Search) => {
+                self.state = State::Search { left: search_left };
                 let mut says = None;
                 if self.scanning > 0.0 {
                     self.scanning -= dt;
@@ -587,6 +686,52 @@ mod tests {
         }
         let away = flat(player - patrol.under()).norm();
         assert!(away > ENGAGE + 5.0 && away <= 15.5, "{away}");
+    }
+
+    #[test]
+    fn its_reasoner_chooses_and_says_why() {
+        let mut patrol = sentry();
+        let player = Vector3::new(20.0, 0.0, 0.0);
+        assert_eq!(patrol.think(true, player, &mut Open, 0.1), Some(Event::Spotted));
+        let scores = &patrol.reasoner.scores;
+        assert_eq!(scores.iter().map(|&(m, _)| m).collect::<Vec<_>>(), vec![Mode::Engage, Mode::Search, Mode::Patrol]);
+        assert_eq!(scores[0].1, 1.0, "it saw them");
+        assert_eq!(scores[1].1, 0.0, "nothing to search for, calm");
+    }
+
+    #[test]
+    fn weighed_its_own_way_a_drone_leaves_a_player_too_far_off_alone() {
+        // Engaging only within 15 m - fully at 10, not at all past 15.
+        let mut patrol = sentry();
+        patrol.reasoner = reasoner();
+        patrol.reasoner.actions[0] = Action::new(Mode::Engage, 1.0)
+            .when(Input::Sees, Curve::Above { at: 0.5 })
+            .when(Input::Distance, Curve::Linear { from: 15.0, to: 10.0 });
+        let far = Vector3::new(30.0, 0.0, 0.0);
+        assert_eq!(patrol.think(true, far, &mut Open, 0.1), None);
+        assert_eq!(patrol.state, State::Patrol, "seen, but too far to bother with");
+        let near = Vector3::new(8.0, 0.0, 0.0);
+        assert_eq!(patrol.think(true, near, &mut Open, 0.1), Some(Event::Spotted));
+        // The default goes after them however far.
+        let mut patrol = sentry();
+        assert_eq!(patrol.think(true, far, &mut Open, 0.1), Some(Event::Spotted));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn its_reasoner_can_be_read_from_a_file() {
+        let read: Reasoner<Mode, Input> = serde_json::from_str(
+            r#"{ "inertia": 0.2, "actions": [
+                { "action": "Engage", "weight": 1.0, "considerations": [
+                    { "input": "Sees", "curve": { "Above": { "at": 0.5 } } },
+                    { "input": "Distance", "curve": { "Linear": { "from": 15.0, "to": 10.0 } } } ] },
+                { "action": "Patrol", "weight": 0.2, "considerations": [] } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(read.actions.len(), 2);
+        assert_eq!(read.actions[0].considerations[1].curve, Curve::Linear { from: 15.0, to: 10.0 });
+        let back: Reasoner<Mode, Input> = serde_json::from_str(&serde_json::to_string(&reasoner()).unwrap()).unwrap();
+        assert_eq!(back, reasoner());
     }
 
     #[test]
