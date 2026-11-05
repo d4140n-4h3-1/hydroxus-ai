@@ -4,7 +4,8 @@
 //! It is in four parts, and its alert phases:
 //!
 //! - [`perception`]: what an NPC takes in - what it sees ([`perception::sight`]), hears
-//!   ([`perception::hearing`]), the bolts it notices flying by ([`perception::bolts`]), and what
+//!   ([`perception::hearing`]), how it becomes aware of someone ([`perception::detection`]), the
+//!   bolts it notices flying by ([`perception::bolts`]), and what
 //!   it can tell of a shooting it saw ([`perception::witness`]).
 //! - [`tactics`]: what it does about it - searching for someone lost ([`tactics::search`]),
 //!   joining a chase ([`tactics::join`]), pacing itself ([`tactics::pace`]), cutting off and
@@ -120,6 +121,8 @@ pub struct Tuning {
     pub alert: crate::alert::Tuning,
     /// What an NPC sees.
     pub sight: crate::perception::sight::Sight,
+    /// How quickly it becomes aware of someone.
+    pub detection: crate::perception::detection::Tuning,
     /// Bolts flying by, felt and noticed.
     pub bolts: crate::perception::bolts::Tuning,
     /// What a witness can tell of a shooting.
@@ -183,6 +186,7 @@ impl Tuning {
     pub const DEFAULT: Self = Self {
         alert: crate::alert::Tuning::DEFAULT,
         sight: crate::perception::sight::Sight::DEFAULT,
+        detection: crate::perception::detection::Tuning::DEFAULT,
         bolts: crate::perception::bolts::Tuning::DEFAULT,
         witness: crate::perception::witness::Tuning::DEFAULT,
         search: crate::tactics::search::Tuning::DEFAULT,

@@ -44,6 +44,10 @@ pub struct Sight {
     pub crawling: f32,
     /// How much of how far it would see, it sees in the dark.
     pub dark: f32,
+    /// How visible someone is at the very edge of how far it sees, of how visible right in front
+    /// of it (see [`Sight::visibility`]); and how much less so out of the corner of its eye.
+    pub edge: f32,
+    pub glimpse: f32,
 }
 
 impl Sight {
@@ -56,6 +60,8 @@ impl Sight {
         crouched: 0.5,
         crawling: 0.3,
         dark: 0.35,
+        edge: 0.25,
+        glimpse: 0.5,
     };
 }
 
@@ -75,6 +81,33 @@ impl Sight {
             (_, Stance::Crawling) => self.crawling,
         };
         self.range * lit * low
+    }
+
+    /// How visible someone at `them` holding themselves in `stance` is to an NPC at `feet`, facing
+    /// `heading`, in `alert` - or calm, with none - in the dark or not, if nothing were in the
+    /// way: from 0, where it could not see them at all (see [`Sight::could_see`]), to 1, right in
+    /// front of it. Less the further off they are, of as far as it sees them - [`Sight::edge`] at
+    /// the very edge - and [`Sight::glimpse`] as much out of the corner of its eye. Crouched,
+    /// crawling or in the dark, it sees them less far, and so they are less visible anywhere. How
+    /// quickly it becomes aware of them (see [`crate::perception::detection`]).
+    pub fn visibility(
+        &self,
+        alert: Option<Alert>,
+        feet: Vector3<f32>,
+        heading: f32,
+        them: Vector3<f32>,
+        stance: Stance,
+        in_the_dark: bool,
+    ) -> f32 {
+        if !self.could_see(alert, feet, heading, them, stance, in_the_dark) {
+            return 0.0;
+        }
+        let to = them - feet;
+        let across = flat(to).norm();
+        let clearly = flat(to).dot(&forward(heading)) >= across * self.cone.cos();
+        let reach = self.reach(alert, stance, in_the_dark) * if clearly { 1.0 } else { self.peripheral };
+        let near = (1.0 - to.norm() / reach.max(1.0e-3)).clamp(0.0, 1.0);
+        (self.edge + (1.0 - self.edge) * near) * if clearly { 1.0 } else { self.glimpse }
     }
 
     /// Whether an NPC at `feet`, facing `heading`, in `alert` - or calm, with none - could see
