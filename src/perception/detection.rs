@@ -16,6 +16,8 @@
 //! A game keeps one [`Detection`] for each NPC that watches, steps it each frame with how visible
 //! the player is to it, and shows the most aware of them ([`most_aware`]) as a meter.
 
+use nalgebra::Vector3;
+
 tuning!(
     /// How quickly an NPC becomes aware of someone, and forgets them.
     {
@@ -143,6 +145,15 @@ fn change(was: Stage, now: Stage) -> Option<Change> {
     }
 }
 
+/// Which way `there` is from one at `from` facing `heading` (left positive from the world's +z),
+/// along the ground, in radians: 0 straight ahead, to the right more than nothing, to the left less,
+/// straight behind ±π - for showing the player which way someone becoming aware of them is. None
+/// right where they stand.
+pub fn bearing(from: Vector3<f32>, heading: f32, there: Vector3<f32>) -> Option<f32> {
+    let to = crate::flat(there - from);
+    (to.norm() > 1.0e-3).then(|| to.dot(&crate::right_of(heading)).atan2(to.dot(&crate::forward(heading))))
+}
+
 /// The stage of one `level` aware, from 0 to 1, as `tuning` has it.
 pub fn stage_at(tuning: &Tuning, level: f32) -> Stage {
     if level >= 1.0 {
@@ -164,8 +175,21 @@ pub fn most_aware<'a>(tuning: &Tuning, watchers: impl IntoIterator<Item = &'a De
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bearing_is_from_straight_ahead_right_positive() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let close = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-5);
+        // Facing +z: its right is -x.
+        assert!(close(bearing(Vector3::zeros(), 0.0, Vector3::new(0.0, 0.0, 5.0)), 0.0));
+        assert!(close(bearing(Vector3::zeros(), 0.0, Vector3::new(-5.0, 0.0, 0.0)), FRAC_PI_2));
+        assert!(close(bearing(Vector3::zeros(), 0.0, Vector3::new(5.0, 0.0, 0.0)), -FRAC_PI_2));
+        assert!(bearing(Vector3::zeros(), 0.0, Vector3::new(0.0, 0.0, -5.0)).is_some_and(|b| (b.abs() - PI).abs() < 1e-5));
+        // Facing +x (heading π/2), +x is straight ahead.
+        assert!(close(bearing(Vector3::zeros(), FRAC_PI_2, Vector3::new(5.0, 3.0, 0.0)), 0.0));
+        assert_eq!(bearing(Vector3::zeros(), 0.0, Vector3::new(0.0, 2.0, 0.0)), None);
+    }
     use crate::perception::sight::{Sight, Stance};
-    use nalgebra::Vector3;
 
     /// How long, in seconds, to spot someone as visible as `visible`, stepping `dt` at a time.
     fn time_to_spot(visible: f32, eagerness: f32) -> f32 {
