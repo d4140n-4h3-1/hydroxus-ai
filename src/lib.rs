@@ -21,8 +21,11 @@
 //!   ([`navigation::steer`]), and driving ([`navigation::drive`]).
 //! - [`social`]: NPCs among each other - walking about in pairs and groups
 //!   ([`social::group`]), meeting and talking and being talked to ([`social::talk`]), telling a
-//!   sentry of trouble and sounding the alarm ([`social::report`]), and a city's crowd
-//!   ([`social::crowd`]).
+//!   sentry of trouble and sounding the alarm ([`social::report`]), what NPCs and their factions
+//!   think of the player and pass on ([`social::opinion`], [`social::rumour`],
+//!   [`social::faction`]), what becomes of their own ([`social::ties`]), the trouble they keep
+//!   away from ([`social::trouble`]), how they take the player passing ([`social::passing`]), and
+//!   a city's crowd ([`social::crowd`]).
 //! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next,
 //!   which what an NPC perceives and what it does both turn on.
 //!
@@ -181,6 +184,14 @@ pub struct Tuning {
     pub rumour: crate::social::rumour::Tuning,
     /// What NPCs talk about.
     pub chat: crate::social::chat::Tuning,
+    /// A faction's standing with the player.
+    pub faction: crate::social::faction::Tuning,
+    /// Trouble, told on and kept away from.
+    pub trouble: crate::social::trouble::Tuning,
+    /// What becomes of one's own.
+    pub ties: crate::social::ties::Tuning,
+    /// The player passing by.
+    pub passing: crate::social::passing::Tuning,
 }
 
 impl Tuning {
@@ -218,6 +229,10 @@ impl Tuning {
         opinion: crate::social::opinion::Tuning::DEFAULT,
         rumour: crate::social::rumour::Tuning::DEFAULT,
         chat: crate::social::chat::Tuning::DEFAULT,
+        faction: crate::social::faction::Tuning::DEFAULT,
+        trouble: crate::social::trouble::Tuning::DEFAULT,
+        ties: crate::social::ties::Tuning::DEFAULT,
+        passing: crate::social::passing::Tuning::DEFAULT,
     };
 }
 
