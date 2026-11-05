@@ -71,7 +71,7 @@ It is in four folders, and its alert phases besides.
 
 | Module | What it does |
 |--------|--------------|
-| `alert` | Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next. What an NPC perceives and what it does both turn on it. |
+| `alert` | Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next; and wariness - what an NPC has been through, from a glimpse to a body found, drawing out how long it searches and stays wary, and how keenly it looks, fading over minutes. What an NPC perceives and what it does both turn on it. |
 
 ```toml
 [dependencies]
