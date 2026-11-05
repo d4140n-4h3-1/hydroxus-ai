@@ -30,7 +30,7 @@ It is in four folders, and its alert phases besides.
 | `join` | A sentry that sees another after the player joins in, calm or not, as it would see the player standing - so a chase draws in every one that catches sight of it. |
 | `pace` | Sprinting now and then in a chase, never as it starts; and, for one with breath to keep, easing off to a jog before it runs out, and keeping some back for a last burst. |
 | `chase` | Cutting off whoever is being chased, a little ahead of them, rather than running after them; and running from a pursuer. |
-| `threat` | A weapon pointed at an NPC: in the middle of the view or not; how long it stands for it, warns, warns again and then does something about it. |
+| `threat` | A weapon pointed at an NPC: in the middle of the view or not; how long it stands for it, warns, warns again and then does something about it; and a weapon only drawn near it - uneasy, watching whoever holds it, backing away if they come too near, at ease again once it is put away. |
 | `fire` | When and how wide an armed NPC shoots: from how far, how often, facing how nearly, and a rifle's bursts. |
 | `blind` | Shot at by someone it cannot see, firing blind back where the shots came from, as Fallout's NPCs do. |
 | `cover` | A bystander running from a shooting to somewhere it cannot be seen from. |
