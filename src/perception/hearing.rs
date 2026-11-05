@@ -26,9 +26,16 @@ impl Heard {
     /// Whether it is heard by someone at `feet`: as far as it has carried to where the floor they
     /// stand on comes into it, and on from there to them.
     pub fn by(&self, mesh: &NavMesh, feet: Vector3<f32>) -> bool {
-        mesh.poly_at(feet)
-            .and_then(|n| self.reached.get(&n))
-            .is_some_and(|&(entry, carried)| carried + (feet.x - entry[0]).hypot(feet.z - entry[1]) <= self.within)
+        self.nearness(mesh, feet).is_some()
+    }
+
+    /// How near it is to someone at `feet` who hears it, of as far as it carries: 1 right beside
+    /// it, less the further along the floor, nothing at the very edge. None if they do not hear it.
+    pub fn nearness(&self, mesh: &NavMesh, feet: Vector3<f32>) -> Option<f32> {
+        let n = mesh.poly_at(feet)?;
+        let &(entry, carried) = self.reached.get(&n)?;
+        let along = carried + (feet.x - entry[0]).hypot(feet.z - entry[1]);
+        (along <= self.within).then(|| (1.0 - along / self.within.max(1.0e-3)).clamp(0.0, 1.0))
     }
 }
 
@@ -53,5 +60,9 @@ mod tests {
         assert!(!heard.by(&mesh, Vector3::new(0.5, 0.0, 2.5)), "through the wall, 2 m off");
         let loud = Heard::at(&mesh, Vector3::new(0.5, 0.0, 0.5), 60.0).unwrap();
         assert!(loud.by(&mesh, Vector3::new(0.5, 0.0, 2.5)), "round by the far end");
+        // Nearer along the corridor, the nearer it is.
+        let (near, far) = (heard.nearness(&mesh, Vector3::new(1.5, 0.0, 0.5)), heard.nearness(&mesh, Vector3::new(4.5, 0.0, 0.5)));
+        assert!(near.unwrap() > far.unwrap() && far.unwrap() > 0.0, "{near:?} {far:?}");
+        assert_eq!(heard.nearness(&mesh, Vector3::new(7.5, 0.0, 0.5)), None);
     }
 }

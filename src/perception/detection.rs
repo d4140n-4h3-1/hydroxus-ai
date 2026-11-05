@@ -9,6 +9,10 @@
 //! something ([`Stage::Caution`]); full, it has spotted them ([`Stage::Danger`]), and a game would
 //! have it go after them.
 //!
+//! What it hears adds to it too ([`Detection::hear`]): a noise close by - footfalls, a landing -
+//! more than one at the edge of where it carries, and more again the keener it is looking. Enough
+//! of them, and it is as sure someone is there as if it had seen them.
+//!
 //! A game keeps one [`Detection`] for each NPC that watches, steps it each frame with how visible
 //! the player is to it, and shows the most aware of them ([`most_aware`]) as a meter.
 
@@ -26,6 +30,9 @@ tuning!(
         /// How many times as quickly it becomes aware of someone it is searching for already, as
         /// `eagerness`, than calm.
         searching: f32 = SEARCHING,
+        /// How much awareness a noise right beside it adds, of all of it: less the further off
+        /// along the floor it was (see [`Heard::nearness`](crate::perception::hearing::Heard::nearness)).
+        hearing: f32 = HEARING,
     }
 );
 
@@ -38,6 +45,8 @@ pub const DRAIN: f32 = 0.35;
 pub const CAUTION: f32 = 0.25;
 /// How many times as quickly one searching becomes aware of someone, as calm.
 pub const SEARCHING: f32 = 3.0;
+/// How much awareness a noise right beside an NPC adds, of all of it.
+pub const HEARING: f32 = 0.6;
 
 /// How aware an NPC is of someone, as a sneaking player is shown it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -94,6 +103,17 @@ impl Detection {
         *self = Self::default();
     }
 
+    /// A noise heard `nearness` near (see
+    /// [`Heard::nearness`](crate::perception::hearing::Heard::nearness)) - 1 right beside it - it
+    /// listening `eagerness` times as keenly as when calm: the more aware of someone for it. What
+    /// that came to, if anything.
+    pub fn hear(&mut self, tuning: &Tuning, nearness: f32, eagerness: f32) -> Option<Change> {
+        let was = self.stage(tuning);
+        self.unseen = 0.0;
+        self.level = (self.level + tuning.hearing * nearness.clamp(0.0, 1.0) * eagerness.max(0.0)).min(1.0);
+        change(was, self.stage(tuning))
+    }
+
     /// Moves it on `dt` with them as `visible` as they are to it now - 0 out of sight (see
     /// [`Sight::visibility`](crate::perception::sight::Sight::visibility)) - it looking for them
     /// `eagerness` times as keenly as when calm: filling while it sees them, draining a while
@@ -109,12 +129,17 @@ impl Detection {
                 self.level = (self.level - tuning.drain * dt).max(0.0);
             }
         }
-        match (was, self.stage(tuning)) {
-            (before, Stage::Danger) if before != Stage::Danger => Some(Change::Spotted),
-            (Stage::Hidden, Stage::Caution) => Some(Change::Noticed),
-            (before, Stage::Hidden) if before != Stage::Hidden => Some(Change::Lost),
-            _ => None,
-        }
+        change(was, self.stage(tuning))
+    }
+}
+
+/// What going from stage `was` to `now` came to.
+fn change(was: Stage, now: Stage) -> Option<Change> {
+    match (was, now) {
+        (before, Stage::Danger) if before != Stage::Danger => Some(Change::Spotted),
+        (Stage::Hidden, Stage::Caution) => Some(Change::Noticed),
+        (before, Stage::Hidden) if before != Stage::Hidden => Some(Change::Lost),
+        _ => None,
     }
 }
 
@@ -194,6 +219,24 @@ mod tests {
             d.step(&t, 0.0, 1.0, 0.01);
         }
         assert_eq!(d.stage(&t), Stage::Hidden);
+    }
+
+    #[test]
+    fn noises_close_by_make_it_aware_and_far_off_barely() {
+        let t = Tuning::DEFAULT;
+        // A footfall right beside it: noticed at once; another, and it is sure.
+        let mut d = Detection::default();
+        assert_eq!(d.hear(&t, 1.0, 1.0), Some(Change::Noticed));
+        assert_eq!(d.hear(&t, 1.0, 1.0), Some(Change::Spotted));
+        // At the edge of where they carry: many before it so much as notices.
+        let mut d = Detection::default();
+        let heard = (1..20).find(|_| d.hear(&t, 0.05, 1.0) == Some(Change::Noticed));
+        assert!(heard.is_some_and(|n| n >= 8), "{heard:?}");
+        // Heard, it does not forget at once.
+        let mut d = Detection::default();
+        d.hear(&t, 0.8, 1.0);
+        d.step(&t, 0.0, 1.0, FORGET_AFTER * 0.5);
+        assert!(d.level > 0.4);
     }
 
     #[test]
