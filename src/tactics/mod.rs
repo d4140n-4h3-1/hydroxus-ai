@@ -11,6 +11,7 @@
 //! - [`blind`]: shot at by someone it cannot see, firing blind back where the shots came from.
 //! - [`cover`]: a bystander running from a shooting, to somewhere it cannot be seen from.
 //! - [`team`]: fighting as a team: shared sightings, targets, cover, flanking, covering fire.
+//! - [`patrol`]: a flying sentry's patrol, search and Alert, and its flight along its route.
 
 pub mod blind;
 pub mod chase;
@@ -18,6 +19,7 @@ pub mod cover;
 pub mod fire;
 pub mod join;
 pub mod pace;
+pub mod patrol;
 pub mod search;
 pub mod team;
 pub mod threat;

@@ -33,6 +33,7 @@ It is in four folders, and its alert phases besides.
 | `blind` | Shot at by someone it cannot see, firing blind back where the shots came from, as Fallout's NPCs do. |
 | `cover` | A bystander running from a shooting to somewhere it cannot be seen from. |
 | `team` | Fighting as a team: sightings shared, targets picked and kept, the ground the enemy sees kept out of, cover ranked, flanking, sidestepping, moving only under covering fire, and noticing when it is stuck. |
+| `patrol` | A flying sentry - a security drone: patrolling from spot to spot or round a post, searching where the player was and the spots round it, coming on to its range on Alert and facing them ready to fire, and calm again once its search runs out; flying along its route, hovering over the floor or free through the air, never into anyone. |
 
 ### `navigation` - getting about
 
@@ -48,6 +49,8 @@ It is in four folders, and its alert phases besides.
 | `ride` | Taking a train: up to the platform, waiting by a doorway no one else is, on only with time to, and off at the station it is going to. |
 | `steer` | Making way in a corridor: veering right round someone ahead, stopping only for someone right in front, stepping aside for someone coming. |
 | `drive` | Riding a vehicle round a course of checkpoints - flat out on the straights, easing into the turns, over the speed pads - pulling out round one ahead; and in traffic, stopping short of whoever is in the way, and for an amber light if it can. |
+| `traffic` | A city's streets as junctions and lanes, which can be driven as the game's rays find them, stop lights where two main streets meet and their cycles; bikes keeping right, planning their turns, stopping on red and for anyone in the road. |
+| `flight` | Flying free: a flier's way through the air - straight there, up and over what is in the way, or along the floor under a roof, its corners cut. |
 
 ### `social` - NPCs among each other
 
