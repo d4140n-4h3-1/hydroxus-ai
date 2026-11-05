@@ -7,6 +7,7 @@
 //! - [`pace`]: sprinting now and then in a chase, and keeping breath for a last burst.
 //! - [`chase`]: cutting someone off rather than running after them, and running from a pursuer.
 //! - [`threat`]: a weapon pointed at an NPC: its warnings, then its doing something about it.
+//! - [`investigate`]: going to look where something was noticed, and looking about there.
 //! - [`fire`]: when and how wide an armed NPC shoots: from how far, how often, facing how nearly.
 //! - [`blind`]: shot at by someone it cannot see, firing blind back where the shots came from.
 //! - [`cover`]: a bystander running from a shooting, to somewhere it cannot be seen from.
@@ -18,6 +19,7 @@ pub mod blind;
 pub mod chase;
 pub mod cover;
 pub mod fire;
+pub mod investigate;
 pub mod join;
 pub mod pace;
 pub mod patrol;

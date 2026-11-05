@@ -26,6 +26,7 @@ It is in four folders, and its alert phases besides.
 | Module | What it does |
 |--------|--------------|
 | `search` | Searching for someone lost from sight, together, over the navmesh: where they could be by now, spreading from polygon to polygon no faster than they could go, cleared wherever a searcher looks; and where each searcher should look next, clear of where the others are going. In a simulated maze, three searchers find a player who has run off and hidden within 12 s 88% of the time with it, against 83% wandering - wandering being much better than it was on the grid, its routes running straight down the corridors. |
+| `investigate` | Having noticed something, not sure enough to go after anyone: looking that way a moment, going over to where it was - to where it was glimpsed last, if again - looking about there, and going back to what it was doing; giving up on somewhere it cannot get to. |
 | `join` | A sentry that sees another after the player joins in, calm or not, as it would see the player standing - so a chase draws in every one that catches sight of it. |
 | `pace` | Sprinting now and then in a chase, never as it starts; and, for one with breath to keep, easing off to a jog before it runs out, and keeping some back for a last burst. |
 | `chase` | Cutting off whoever is being chased, a little ahead of them, rather than running after them; and running from a pursuer. |
