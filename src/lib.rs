@@ -8,7 +8,7 @@
 //!   bolts it notices flying by ([`perception::bolts`]), and what
 //!   it can tell of a shooting it saw ([`perception::witness`]).
 //! - [`tactics`]: what it does about it - searching for someone lost ([`tactics::search`]),
-//!   joining a chase ([`tactics::join`]), pacing itself ([`tactics::pace`]), cutting off and
+//!   investigating what it noticed ([`tactics::investigate`]), joining a chase ([`tactics::join`]), pacing itself ([`tactics::pace`]), cutting off and
 //!   running ([`tactics::chase`]), answering a weapon pointed at it ([`tactics::threat`]),
 //!   shooting ([`tactics::fire`]) and firing blind ([`tactics::blind`]), and taking cover
 //!   ([`tactics::cover`]); fighting as a team ([`tactics::team`]); a flying sentry's patrol
@@ -131,6 +131,8 @@ pub struct Tuning {
     pub search: crate::tactics::search::Tuning,
     /// Pacing a chase.
     pub pace: crate::tactics::pace::Tuning,
+    /// Investigating what was noticed.
+    pub investigate: crate::tactics::investigate::Tuning,
     /// Cutting off and running.
     pub chase: crate::tactics::chase::Tuning,
     /// A weapon pointed at an NPC.
@@ -191,6 +193,7 @@ impl Tuning {
         witness: crate::perception::witness::Tuning::DEFAULT,
         search: crate::tactics::search::Tuning::DEFAULT,
         pace: crate::tactics::pace::Tuning::DEFAULT,
+        investigate: crate::tactics::investigate::Tuning::DEFAULT,
         chase: crate::tactics::chase::Tuning::DEFAULT,
         threat: crate::tactics::threat::Tuning::DEFAULT,
         fire: crate::tactics::fire::Tuning::DEFAULT,
