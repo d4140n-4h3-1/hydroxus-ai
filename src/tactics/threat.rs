@@ -14,6 +14,20 @@ pub const AIM_WIDTH: f32 = 0.6;
 pub const WARNING: f32 = 2.5;
 pub const CALM: f32 = 2.5;
 
+tuning!(
+    /// How an NPC takes a weapon pointed at it (see the module's constants, its defaults).
+    {
+        /// How far off a weapon pointed at it bothers it, and how far to the side of the middle of
+        /// the view it can be, in meters.
+        aim_range: f32 = AIM_RANGE,
+        aim_width: f32 = AIM_WIDTH,
+        /// How long each warning holds, and how long the weapon has to be off it for it to calm
+        /// down, in seconds.
+        warning: f32 = WARNING,
+        calm: f32 = CALM,
+    }
+);
+
 /// How an NPC takes having a weapon pointed at it, as it goes from one stage to the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Threat {
@@ -29,20 +43,20 @@ pub enum Threat {
 
 /// Whether the middle of a view from `eye`, looking `ahead` - one meter long - is on `target`:
 /// in front, not too far off, and not too far to its side.
-pub fn pointed_at(eye: Vector3<f32>, ahead: Vector3<f32>, target: Vector3<f32>) -> bool {
+pub fn pointed_at(tuning: &Tuning, eye: Vector3<f32>, ahead: Vector3<f32>, target: Vector3<f32>) -> bool {
     let to = target - eye;
     let along = to.dot(&ahead);
-    along > 0.0 && along < AIM_RANGE && (to - ahead * along).norm() < AIM_WIDTH
+    along > 0.0 && along < tuning.aim_range && (to - ahead * along).norm() < tuning.aim_width
 }
 
 /// How long an NPC that stands `patience` seconds of a weapon has it pointed at it, in seconds,
 /// after it has warned whoever holds it `warned` times, before it goes on to the next stage:
 /// first its patience, then that and as long again as it takes to warn them.
-pub fn stage_after(warned: u8, patience: f32) -> f32 {
+pub fn stage_after(tuning: &Tuning, warned: u8, patience: f32) -> f32 {
     if warned == 0 {
         patience
     } else {
-        patience + WARNING
+        patience + tuning.warning
     }
 }
 
@@ -54,17 +68,17 @@ mod tests {
     fn the_weapon_is_pointed_at_what_is_in_the_middle_of_the_view() {
         let eye = Vector3::zeros();
         let ahead = Vector3::z();
-        assert!(pointed_at(eye, ahead, Vector3::new(0.3, 0.0, 10.0)));
-        assert!(!pointed_at(eye, ahead, Vector3::new(1.0, 0.0, 10.0)), "off to the side");
-        assert!(!pointed_at(eye, ahead, Vector3::new(0.0, 0.0, -5.0)), "behind");
-        assert!(!pointed_at(eye, ahead, Vector3::new(0.0, 0.0, AIM_RANGE + 1.0)), "too far");
+        assert!(pointed_at(&Tuning::DEFAULT, eye, ahead, Vector3::new(0.3, 0.0, 10.0)));
+        assert!(!pointed_at(&Tuning::DEFAULT, eye, ahead, Vector3::new(1.0, 0.0, 10.0)), "off to the side");
+        assert!(!pointed_at(&Tuning::DEFAULT, eye, ahead, Vector3::new(0.0, 0.0, -5.0)), "behind");
+        assert!(!pointed_at(&Tuning::DEFAULT, eye, ahead, Vector3::new(0.0, 0.0, AIM_RANGE + 1.0)), "too far");
     }
 
     #[test]
     fn each_warning_holds_long_enough_to_be_said() {
-        assert_eq!(stage_after(0, 1.0), 1.0, "its patience, before it first warns");
-        assert!(stage_after(1, 1.0) >= WARNING, "then time to say it");
-        assert_eq!(stage_after(1, 1.0), stage_after(2, 1.0));
-        assert!(stage_after(0, 1.0) < stage_after(0, 2.0), "a less patient NPC is sooner");
+        assert_eq!(stage_after(&Tuning::DEFAULT, 0, 1.0), 1.0, "its patience, before it first warns");
+        assert!(stage_after(&Tuning::DEFAULT, 1, 1.0) >= WARNING, "then time to say it");
+        assert_eq!(stage_after(&Tuning::DEFAULT, 1, 1.0), stage_after(&Tuning::DEFAULT, 2, 1.0));
+        assert!(stage_after(&Tuning::DEFAULT, 0, 1.0) < stage_after(&Tuning::DEFAULT, 0, 2.0), "a less patient NPC is sooner");
     }
 }

@@ -13,3 +13,11 @@ categories = ["game-development"]
 # animations; this decides what an NPC sees, hears and does about it.
 [dependencies]
 nalgebra = "0.35"
+# Reading a game's tuning from a file (see `Tuning`).
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+serde = ["dep:serde", "nalgebra/serde-serialize"]

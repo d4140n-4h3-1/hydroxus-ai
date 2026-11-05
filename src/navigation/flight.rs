@@ -18,21 +18,33 @@ pub const CLIMB: f32 = 80.0;
 pub const CLIMB_STEP: f32 = 1.5;
 pub const SHORTCUTS: usize = 40;
 
+tuning!(
+    /// How a flier finds its way through the air (see the module's constants, its defaults).
+    {
+        /// How far it keeps from anything solid; how far up it looks for a way over, and in steps
+        /// of how much, in meters; and how many cuts it tries across corners.
+        flight_clearance: f32 = FLIGHT_CLEARANCE,
+        climb: f32 = CLIMB,
+        climb_step: f32 = CLIMB_STEP,
+        shortcuts: usize = SHORTCUTS,
+    }
+);
+
 /// Whether a ball `radius` across its middle could fly from the first point to the second without
 /// touching anything solid in its way.
 pub type Clear<'a> = dyn Fn(Vector3<f32>, Vector3<f32>, f32) -> bool + 'a;
 
 /// How far a flier could rise from `at`, up to `most`, keeping [`FLIGHT_CLEARANCE`] from anything
 /// in its way, as `clear` has it.
-pub fn headroom(clear: &Clear<'_>, at: Vector3<f32>, most: f32) -> f32 {
+pub fn headroom(tuning: &Tuning, clear: &Clear<'_>, at: Vector3<f32>, most: f32) -> f32 {
     let (mut low, mut high) = (0.0, most);
-    if clear(at, at + Vector3::new(0.0, most, 0.0), FLIGHT_CLEARANCE) {
+    if clear(at, at + Vector3::new(0.0, most, 0.0), tuning.flight_clearance) {
         return most;
     }
     // Halving the way to whatever is overhead.
     for _ in 0..8 {
         let middle = (low + high) / 2.0;
-        match clear(at, at + Vector3::new(0.0, middle, 0.0), FLIGHT_CLEARANCE) {
+        match clear(at, at + Vector3::new(0.0, middle, 0.0), tuning.flight_clearance) {
             true => low = middle,
             false => high = middle,
         }
@@ -48,24 +60,26 @@ pub fn headroom(clear: &Clear<'_>, at: Vector3<f32>, most: f32) -> f32 {
 /// first, as the walk grid has it - `hover` over the floor, its corners cut where they can be.
 /// Empty if there is no way: none overhead, and none along the floor.
 pub fn flight(
+    tuning: &Tuning,
     clear: &Clear<'_>,
     from: Vector3<f32>,
     to: Vector3<f32>,
     hover: f32,
     ground: impl FnOnce() -> Vec<Vector3<f32>>,
 ) -> Vec<Vector3<f32>> {
-    if clear(from, to, FLIGHT_CLEARANCE) {
+    let keep = tuning.flight_clearance;
+    if clear(from, to, keep) {
         return vec![to];
     }
     // As high as it can rise at either end, and the lowest it can cross between at that height.
-    let top = (from.y + headroom(clear, from, CLIMB)).min(to.y + headroom(clear, to, CLIMB));
-    let mut height = from.y.max(to.y) + CLIMB_STEP;
+    let top = (from.y + headroom(tuning, clear, from, tuning.climb)).min(to.y + headroom(tuning, clear, to, tuning.climb));
+    let mut height = from.y.max(to.y) + tuning.climb_step;
     while height <= top {
         let (up, over) = (Vector3::new(from.x, height, from.z), Vector3::new(to.x, height, to.z));
-        if clear(up, over, FLIGHT_CLEARANCE) {
+        if clear(up, over, keep) {
             return vec![to, over, up];
         }
-        height += CLIMB_STEP;
+        height += tuning.climb_step;
     }
     // Along the floor, first point first, cutting straight across to the furthest point it can.
     let along: Vec<Vector3<f32>> = ground().into_iter().rev().map(|at| at + Vector3::new(0.0, hover, 0.0)).collect();
@@ -73,9 +87,9 @@ pub fn flight(
     let (mut at, mut next, mut tries) = (from, 0, 0);
     while next < along.len() {
         let mut furthest = next;
-        while furthest + 1 < along.len() && tries < SHORTCUTS {
+        while furthest + 1 < along.len() && tries < tuning.shortcuts {
             tries += 1;
-            if !clear(at, along[furthest + 1], FLIGHT_CLEARANCE) {
+            if !clear(at, along[furthest + 1], keep) {
                 break;
             }
             furthest += 1;
@@ -83,7 +97,7 @@ pub fn flight(
         way.push(along[furthest]);
         at = along[furthest];
         next = furthest + 1;
-        if tries >= SHORTCUTS {
+        if tries >= tuning.shortcuts {
             way.extend_from_slice(&along[next..]);
             break;
         }
@@ -129,10 +143,10 @@ mod tests {
         let nowhere = || -> Vec<Vector3<f32>> { panic!("no need of a way along the floor") };
         // Nothing in the way: straight there.
         let walls = [floor];
-        assert_eq!(flight(&boxes(&walls), from, to, HOVER, nowhere), vec![to]);
+        assert_eq!(flight(&Tuning::DEFAULT, &boxes(&walls), from, to, HOVER, nowhere), vec![to]);
         // A wall 5 m high across the way: up, over it with room to spare, and down.
         let walls = [floor, (Vector3::new(0.0, 2.5, 0.0), Vector3::new(20.0, 2.5, 0.2))];
-        let route = flight(&boxes(&walls), from, to, HOVER, nowhere);
+        let route = flight(&Tuning::DEFAULT, &boxes(&walls), from, to, HOVER, nowhere);
         assert_eq!(route.len(), 3, "{route:?}");
         assert_eq!(route[0], to);
         assert!(route[1].y > 5.0 + FLIGHT_CLEARANCE && route[1].y < 5.0 + FLIGHT_CLEARANCE + CLIMB_STEP + 0.01, "{route:?}");
@@ -152,7 +166,7 @@ mod tests {
             })
             .rev()
             .collect();
-        let route = flight(&boxes(&walls), from, to, HOVER, || steps.clone());
+        let route = flight(&Tuning::DEFAULT, &boxes(&walls), from, to, HOVER, || steps.clone());
         assert!(flown(&boxes(&walls), from, &route), "{route:?}");
         assert!(route.iter().any(|at| at.x > 16.0 && at.z.abs() < 1.0), "not through the doorway: {route:?}");
         assert!(route.len() <= 8 && route.len() < steps.len() / 4, "{route:?}");
@@ -162,8 +176,8 @@ mod tests {
     #[test]
     fn its_headroom_is_up_to_whatever_is_overhead() {
         let walls = [(Vector3::new(0.0, 10.1, 0.0), Vector3::new(5.0, 0.1, 5.0))];
-        let room = headroom(&boxes(&walls), Vector3::new(0.0, 2.0, 0.0), CLIMB);
+        let room = headroom(&Tuning::DEFAULT, &boxes(&walls), Vector3::new(0.0, 2.0, 0.0), CLIMB);
         assert!((room - (8.0 - FLIGHT_CLEARANCE)).abs() < 0.5, "{room}");
-        assert_eq!(headroom(&boxes(&[]), Vector3::zeros(), CLIMB), CLIMB);
+        assert_eq!(headroom(&Tuning::DEFAULT, &boxes(&[]), Vector3::zeros(), CLIMB), CLIMB);
     }
 }

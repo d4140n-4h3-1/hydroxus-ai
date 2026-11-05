@@ -136,9 +136,24 @@ pub fn autopilot(vehicle: &Vehicle, course: &Course, handling: &Handling, line: 
 pub const SWERVE_AHEAD: f32 = 12.0;
 pub const SWERVE: f32 = 3.5;
 
+tuning!(
+    /// How a rider gets by and stops for others (see the module's constants, its defaults).
+    {
+        /// How far ahead a racer pulls out round one in front, and how far out, in meters.
+        swerve_ahead: f32 = SWERVE_AHEAD,
+        swerve: f32 = SWERVE,
+        /// In traffic: how far ahead it looks, how far to either side, and how far short it stops
+        /// of a vehicle and of someone on foot, in meters.
+        look: f32 = LOOK,
+        wide: f32 = WIDE,
+        gap_vehicle: f32 = GAP_VEHICLE,
+        gap_foot: f32 = GAP_FOOT,
+    }
+);
+
 /// How far `vehicle` - the `n`th of `others`, where each is - pulls out of its line to get by one
 /// just ahead of it: away from it, the side it is on (left positive).
-pub fn swerve(vehicle: &Vehicle, n: usize, others: &[Vector3<f32>]) -> f32 {
+pub fn swerve(tuning: &Tuning, vehicle: &Vehicle, n: usize, others: &[Vector3<f32>]) -> f32 {
     let ahead = vehicle.ahead();
     let left = Vector3::new(ahead.z, 0.0, -ahead.x);
     let mut out = 0.0;
@@ -148,8 +163,8 @@ pub fn swerve(vehicle: &Vehicle, n: usize, others: &[Vector3<f32>]) -> f32 {
         }
         let to = at - vehicle.position;
         let (front, side) = (to.dot(&ahead), to.dot(&left));
-        if front > 0.0 && front < SWERVE_AHEAD && side.abs() < 2.5 && to.y.abs() < 3.0 {
-            out = if side > 0.0 { -SWERVE } else { SWERVE };
+        if front > 0.0 && front < tuning.swerve_ahead && side.abs() < 2.5 && to.y.abs() < 3.0 {
+            out = if side > 0.0 { -tuning.swerve } else { tuning.swerve };
         }
     }
     out
@@ -174,6 +189,7 @@ pub const GAP_FOOT: f32 = 3.5;
 /// of everyone in its way of `obstacles`, and of every vehicle of them - each none if no one is. Kept waiting too long - `impatient` - it goes on round another vehicle, which would
 /// otherwise wait for it for ever; never into anyone on foot.
 pub fn room_ahead(
+    tuning: &Tuning,
     at: Vector3<f32>,
     ahead: Vector3<f32>,
     obstacles: impl IntoIterator<Item = Obstacle>,
@@ -184,8 +200,8 @@ pub fn room_ahead(
     let (mut anyone, mut vehicles): (Option<f32>, Option<f32>) = (None, None);
     for obstacle in obstacles {
         let (there, gap, vehicle) = match obstacle {
-            Obstacle::Vehicle(there) => (there, GAP_VEHICLE, true),
-            Obstacle::Foot(there) => (there, GAP_FOOT, false),
+            Obstacle::Vehicle(there) => (there, tuning.gap_vehicle, true),
+            Obstacle::Foot(there) => (there, tuning.gap_foot, false),
         };
         if vehicle && impatient {
             continue;
@@ -195,7 +211,7 @@ pub fn room_ahead(
             continue;
         }
         let (front, side) = (to.dot(&ahead), to.dot(&right));
-        if front > 0.0 && front < LOOK && side.abs() < WIDE {
+        if front > 0.0 && front < tuning.look && side.abs() < tuning.wide {
             let slow = (2.0 * brake * (front - gap).max(0.0)).sqrt();
             anyone = Some(anyone.map_or(slow, |s| s.min(slow)));
             if vehicle {
@@ -227,22 +243,22 @@ mod tests {
         let ahead = Vector3::z();
         let at = Vector3::zeros();
         let them = [Obstacle::Vehicle(Vector3::new(0.0, 0.0, 10.0)), Obstacle::Foot(Vector3::new(0.5, 0.0, 20.0))];
-        let (anyone, vehicles) = room_ahead(at, ahead, them, 9.0, false);
+        let (anyone, vehicles) = room_ahead(&Tuning::DEFAULT, at, ahead, them, 9.0, false);
         let short = (2.0 * 9.0 * (10.0 - GAP_VEHICLE)).sqrt();
         assert_eq!((anyone, vehicles), (Some(short), Some(short)));
-        let (anyone, vehicles) = room_ahead(at, ahead, them, 9.0, true);
+        let (anyone, vehicles) = room_ahead(&Tuning::DEFAULT, at, ahead, them, 9.0, true);
         assert!(anyone.is_some() && vehicles.is_none(), "impatient, it goes round the vehicle but not the one on foot");
-        assert_eq!(room_ahead(at, ahead, [Obstacle::Foot(Vector3::new(5.0, 0.0, 10.0))], 9.0, false), (None, None), "off to the side");
-        assert_eq!(room_ahead(at, ahead, [Obstacle::Foot(Vector3::new(0.0, 0.0, -5.0))], 9.0, false), (None, None), "behind");
+        assert_eq!(room_ahead(&Tuning::DEFAULT, at, ahead, [Obstacle::Foot(Vector3::new(5.0, 0.0, 10.0))], 9.0, false), (None, None), "off to the side");
+        assert_eq!(room_ahead(&Tuning::DEFAULT, at, ahead, [Obstacle::Foot(Vector3::new(0.0, 0.0, -5.0))], 9.0, false), (None, None), "behind");
     }
 
     #[test]
     fn a_racer_pulls_out_round_one_just_ahead_away_from_the_side_it_is_on() {
         let me = Vehicle { position: Vector3::zeros(), yaw: 0.0, speed: 30.0 };
         // Ahead and a little to the left: out to the right.
-        assert_eq!(swerve(&me, 0, &[me.position, Vector3::new(1.0, 0.0, 8.0)]), -SWERVE);
-        assert_eq!(swerve(&me, 0, &[me.position, Vector3::new(-1.0, 0.0, 8.0)]), SWERVE);
-        assert_eq!(swerve(&me, 0, &[me.position, Vector3::new(0.0, 0.0, 30.0)]), 0.0);
+        assert_eq!(swerve(&Tuning::DEFAULT, &me, 0, &[me.position, Vector3::new(1.0, 0.0, 8.0)]), -SWERVE);
+        assert_eq!(swerve(&Tuning::DEFAULT, &me, 0, &[me.position, Vector3::new(-1.0, 0.0, 8.0)]), SWERVE);
+        assert_eq!(swerve(&Tuning::DEFAULT, &me, 0, &[me.position, Vector3::new(0.0, 0.0, 30.0)]), 0.0);
     }
 
     #[test]

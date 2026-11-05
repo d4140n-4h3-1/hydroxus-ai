@@ -55,13 +55,28 @@ pub const SWAY: f32 = 20.0;
 /// How long its regard takes to ease halfway back to nothing, in seconds.
 pub const REGARD_HALF_LIFE: f32 = 1200.0;
 
+tuning!(
+    /// How an NPC's regard for the player turns into how it takes them (see the module's
+    /// constants, its defaults).
+    {
+        /// The regard over which it is friendly, and under which it is wary, and hostile.
+        friendly: f32 = FRIENDLY,
+        wary: f32 = WARY,
+        hostile: f32 = HOSTILE,
+        /// How many points of chance on a talk check regard all one way or the other is worth.
+        sway: f32 = SWAY,
+        /// How long its regard takes to ease halfway back to nothing, in seconds.
+        regard_half_life: f32 = REGARD_HALF_LIFE,
+    }
+);
+
 /// How an NPC with `regard` takes the player.
-pub fn attitude(regard: f32) -> Attitude {
-    if regard > FRIENDLY {
+pub fn attitude(tuning: &Tuning, regard: f32) -> Attitude {
+    if regard > tuning.friendly {
         Attitude::Friendly
-    } else if regard < HOSTILE {
+    } else if regard < tuning.hostile {
         Attitude::Hostile
-    } else if regard < WARY {
+    } else if regard < tuning.wary {
         Attitude::Wary
     } else {
         Attitude::Neutral
@@ -69,8 +84,8 @@ pub fn attitude(regard: f32) -> Attitude {
 }
 
 /// How many points of chance an NPC's `regard` puts on a talk check, either way.
-pub fn sway(regard: f32) -> i32 {
-    (regard.clamp(-1.0, 1.0) * SWAY).round() as i32
+pub fn sway(tuning: &Tuning, regard: f32) -> i32 {
+    (regard.clamp(-1.0, 1.0) * tuning.sway).round() as i32
 }
 
 #[cfg(test)]
@@ -79,12 +94,12 @@ mod tests {
 
     #[test]
     fn regard_makes_an_attitude_and_sways_a_talk_check() {
-        assert_eq!(attitude(0.0), Attitude::Neutral);
-        assert_eq!(attitude(0.5), Attitude::Friendly);
-        assert_eq!(attitude(-0.3), Attitude::Wary);
-        assert_eq!(attitude(-0.8), Attitude::Hostile);
-        assert_eq!(sway(1.0), 20);
-        assert_eq!(sway(-0.5), -10);
+        assert_eq!(attitude(&Tuning::DEFAULT, 0.0), Attitude::Neutral);
+        assert_eq!(attitude(&Tuning::DEFAULT, 0.5), Attitude::Friendly);
+        assert_eq!(attitude(&Tuning::DEFAULT, -0.3), Attitude::Wary);
+        assert_eq!(attitude(&Tuning::DEFAULT, -0.8), Attitude::Hostile);
+        assert_eq!(sway(&Tuning::DEFAULT, 1.0), 20);
+        assert_eq!(sway(&Tuning::DEFAULT, -0.5), -10);
         assert!(Deed::Shooting.weight() < Deed::Robbing.weight() && Deed::Bribing.weight() > 0.0);
         assert!(Deed::Shooting.spreads() && !Deed::Bribing.spreads());
     }

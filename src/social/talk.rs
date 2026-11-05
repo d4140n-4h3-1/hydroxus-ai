@@ -9,10 +9,25 @@ use nalgebra::Vector3;
 /// looks it can be, in radians, for the player to talk to it.
 pub const TALK_REACH: f32 = 2.5;
 pub const TALK_CONE: f32 = 40.0 * std::f32::consts::PI / 180.0;
+/// How near the player, in meters, what NPCs call out to each other is heard.
+pub const HEARD: f32 = 40.0;
+
+tuning!(
+    /// Who can be talked to, and how far off talk carries (see the module's constants, its
+    /// defaults).
+    {
+        /// How near the player an NPC has to be, in meters, and how far off where they look, in
+        /// radians, to be talked to.
+        talk_reach: f32 = TALK_REACH,
+        talk_cone: f32 = TALK_CONE,
+        /// How near the player what NPCs call out to each other is heard, in meters.
+        heard: f32 = HEARD,
+    }
+);
 
 /// Those of the NPCs with their feet at `npcs` that a player at `feet`, looking `ahead` along the
 /// ground, is close enough to and facing enough to talk to, nearest first, by index.
-pub fn within_talking(npcs: impl Iterator<Item = Vector3<f32>>, feet: Vector3<f32>, ahead: Vector3<f32>) -> Vec<usize> {
+pub fn within_talking(tuning: &Tuning, npcs: impl Iterator<Item = Vector3<f32>>, feet: Vector3<f32>, ahead: Vector3<f32>) -> Vec<usize> {
     let mut near: Vec<(f32, usize)> = npcs
         .enumerate()
         .filter_map(|(i, there)| {
@@ -23,19 +38,16 @@ pub fn within_talking(npcs: impl Iterator<Item = Vector3<f32>>, feet: Vector3<f3
             } else {
                 (to_them.dot(&ahead) / distance).clamp(-1.0, 1.0).acos()
             };
-            (distance < TALK_REACH && off < TALK_CONE).then_some((distance, i))
+            (distance < tuning.talk_reach && off < tuning.talk_cone).then_some((distance, i))
         })
         .collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
     near.into_iter().map(|(_, i)| i).collect()
 }
 
-/// How near the player, in meters, what NPCs call out to each other is heard.
-pub const HEARD: f32 = 40.0;
-
 /// Whether what one at `feet` calls out is heard by the player at `player`.
-pub fn heard(feet: Vector3<f32>, player: Vector3<f32>) -> bool {
-    flat(feet - player).norm() < HEARD
+pub fn heard(tuning: &Tuning, feet: Vector3<f32>, player: Vector3<f32>) -> bool {
+    flat(feet - player).norm() < tuning.heard
 }
 
 /// Of `lone` - NPCs going about by themselves and at ease, by index, where each is - the two
@@ -75,7 +87,7 @@ mod tests {
             Vector3::new(2.0, 0.0, 0.5),  // well off to the side
             Vector3::new(0.0, 0.0, 4.0),  // too far
         ];
-        assert_eq!(within_talking(npcs.into_iter(), Vector3::zeros(), Vector3::z()), [1, 0]);
+        assert_eq!(within_talking(&Tuning::DEFAULT, npcs.into_iter(), Vector3::zeros(), Vector3::z()), [1, 0]);
     }
 
     #[test]
@@ -93,6 +105,6 @@ mod tests {
         assert_eq!(meeting(&[lone[0], lone[4]], player, 2.0), None);
         let feet = |n: usize| Vector3::new(n as f32, 0.0, 0.0);
         assert_eq!(nearest_group([vec![7, 8], vec![2, 3]], feet, player), Some(vec![2, 3]));
-        assert!(heard(Vector3::new(HEARD - 1.0, 0.0, 0.0), player) && !heard(Vector3::new(HEARD + 1.0, 0.0, 0.0), player));
+        assert!(heard(&Tuning::DEFAULT, Vector3::new(HEARD - 1.0, 0.0, 0.0), player) && !heard(&Tuning::DEFAULT, Vector3::new(HEARD + 1.0, 0.0, 0.0), player));
     }
 }

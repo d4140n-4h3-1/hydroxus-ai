@@ -3,7 +3,8 @@
 //! meters rather than steps, and a route as its corners rather than a point a cell.
 //!
 //! A route is kept [`CLEARANCE`] in from the ends of the portals it goes through, so that it
-//! keeps off the walls it rounds, and cuts every other corner. As the grid's are, its points are
+//! keeps off the walls it rounds, and cuts every other corner. How far, and the rest of how a
+//! walker goes about it, is the mesh's [`Tuning`] ([`NavMesh::walk`]). As the grid's are, its points are
 //! the last first - the next to make for at its end - and the start is left out.
 
 use crate::navigation::{
@@ -18,18 +19,36 @@ pub const CLEARANCE: f32 = 0.4;
 /// How much further than as the crow flies an NPC going about its business will walk to get
 /// somewhere, before giving it up for somewhere else (see [`plan_avoiding`]), and a little more.
 pub const DETOUR: f32 = 2.5;
-const DETOUR_MORE: f32 = 10.0;
+pub const DETOUR_MORE: f32 = 10.0;
 /// How far from a point, at most, a floor at its height is looked for, in meters; and how far
 /// above or below it a floor can be and still be at its height.
 pub const NEAR: f32 = 6.0;
 pub const LEVEL: f32 = 1.0;
 /// How many spots are tried, picking somewhere at random.
-const TRIES: usize = 24;
+pub const TRIES: usize = 24;
+
+tuning!(
+    /// How those that walk a navmesh go about it (see the module's constants, its defaults): kept
+    /// with the mesh, as [`NavMesh::walk`].
+    {
+        /// How far a route keeps from the walls it rounds, in meters.
+        clearance: f32 = CLEARANCE,
+        /// How much further than as the crow flies one walks to get somewhere, and a little more.
+        detour: f32 = DETOUR,
+        detour_more: f32 = DETOUR_MORE,
+        /// How far from a point a floor at its height is looked for, and how far above or below it
+        /// can be, in meters.
+        near: f32 = NEAR,
+        level: f32 = LEVEL,
+        /// How many spots are tried, picking somewhere at random.
+        tries: usize = TRIES,
+    }
+);
 
 /// A route over `mesh` from `feet` to `to`, ending at `to` itself - empty if there is no way there
 /// within `reach` meters of walking; `f32::INFINITY` for anywhere at all.
 pub fn route_to(mesh: &NavMesh, feet: Vector3<f32>, to: Vector3<f32>, reach: f32) -> Vec<Vector3<f32>> {
-    mesh.route(feet, to, reach, CLEARANCE, |_| 0.0)
+    mesh.route(feet, to, reach, mesh.walk.clearance, |_| 0.0)
 }
 
 /// As [`route_to`], but each meter across polygon `n` costing `extra(n)` more: a route that keeps
@@ -41,7 +60,7 @@ pub fn route_to_weighted(
     reach: f32,
     extra: impl Fn(Poly) -> f32,
 ) -> Vec<Vector3<f32>> {
-    mesh.route(feet, to, reach, CLEARANCE, extra)
+    mesh.route(feet, to, reach, mesh.walk.clearance, extra)
 }
 
 /// A route over `mesh` from `feet` to somewhere picked by `rng` a `trip` away - from `trip.0` to
@@ -60,7 +79,7 @@ pub fn plan(mesh: &NavMesh, feet: Vector3<f32>, trip: (f32, f32), rng: &mut Rng)
     choices.sort_unstable();
     let goal = choices[rng.below(choices.len())];
     let to = mesh.random_point(goal, &mut |k| rng.below(k));
-    route_to(mesh, feet, to, trip.1 * DETOUR + DETOUR_MORE)
+    route_to(mesh, feet, to, trip.1 * mesh.walk.detour + mesh.walk.detour_more)
 }
 
 /// As [`plan`], a trip from `feet` - but to somewhere not `kept_off`, about a `trip` away as the
@@ -79,7 +98,7 @@ pub fn plan_avoiding(
     if mesh.nearest(feet).is_none() {
         return Vec::new();
     }
-    let goal = (0..TRIES).find_map(|_| {
+    let goal = (0..mesh.walk.tries).find_map(|_| {
         let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
         let away = between(rng, trip);
         let spot = feet + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
@@ -92,13 +111,13 @@ pub fn plan_avoiding(
     let Some((to, away)) = goal else {
         return Vec::new();
     };
-    route_to_weighted(mesh, feet, to, away * DETOUR + DETOUR_MORE, extra)
+    route_to_weighted(mesh, feet, to, away * mesh.walk.detour + mesh.walk.detour_more, extra)
 }
 
 /// Somewhere on the floor of `mesh` within `reach` of `at` as the crow flies, on the floor nearest
 /// its height there, picked by `rng` - or, with nowhere there, the floor nearest `at`.
 pub fn spot_near(mesh: &NavMesh, at: Vector3<f32>, reach: f32, rng: &mut Rng) -> Option<Vector3<f32>> {
-    for _ in 0..TRIES {
+    for _ in 0..mesh.walk.tries {
         let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
         let away = between(rng, (0.0, reach));
         let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
@@ -117,7 +136,7 @@ pub fn spot_near(mesh: &NavMesh, at: Vector3<f32>, reach: f32, rng: &mut Rng) ->
 /// on one of its floors as likely as on the ground - picked by `rng`; or, with nowhere there, the
 /// floor nearest `at`.
 pub fn spot_on_any_floor_near(mesh: &NavMesh, at: Vector3<f32>, reach: f32, rng: &mut Rng) -> Option<Vector3<f32>> {
-    for _ in 0..TRIES {
+    for _ in 0..mesh.walk.tries {
         let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
         let away = between(rng, (0.0, reach));
         let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
@@ -134,7 +153,7 @@ pub fn spot_on_any_floor_near(mesh: &NavMesh, at: Vector3<f32>, reach: f32, rng:
 /// there is floor there at its height, or else the nearest point that is. None with no floor at
 /// its height near it.
 pub fn floor_near(mesh: &NavMesh, point: Vector3<f32>) -> Option<Vector3<f32>> {
-    mesh.floor_near(point, NEAR, LEVEL)
+    mesh.floor_near(point, mesh.walk.near, mesh.walk.level)
 }
 
 /// Whether there is floor at `spot`, within `level` of its height.

@@ -164,7 +164,7 @@ fn flights() {
     let t = Instant::now();
     for &(from, to) in &pairs {
         let ground = || vec![to - Vector3::new(0.0, 1.7, 0.0), (from + to) / 2.0 - Vector3::new(0.0, 1.7, 0.0)];
-        legs += black_box(flight::flight(&clear, from, to, 1.7, ground)).len();
+        legs += black_box(flight::flight(&flight::Tuning::DEFAULT, &clear, from, to, 1.7, ground)).len();
     }
     let took = t.elapsed().as_secs_f64() * 1e3;
     println!(

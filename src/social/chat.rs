@@ -11,6 +11,14 @@ use crate::social::{
 /// no news.
 pub const OPINIONATED: f32 = 0.3;
 
+tuning!(
+    /// What NPCs talk about among themselves.
+    {
+        /// How strongly one has to feel about the player, either way, to talk of them.
+        opinionated: f32 = OPINIONATED,
+    }
+);
+
 /// What a conversation among NPCs is about.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Topic {
@@ -25,7 +33,7 @@ pub enum Topic {
 /// What `members` - two that meet, or a group - talk about: the strongest news one of them has
 /// for another, or else what the most opinionated of them thinks of the player, if it feels
 /// strongly about them, or else small talk.
-pub fn topic(minds: &Minds, members: &[usize]) -> Topic {
+pub fn topic(tuning: &Tuning, minds: &Minds, members: &[usize]) -> Topic {
     let news = members
         .iter()
         .flat_map(|&teller| members.iter().filter(move |&&h| h != teller).map(move |&hearer| (teller, hearer)))
@@ -37,7 +45,7 @@ pub fn topic(minds: &Minds, members: &[usize]) -> Topic {
     members
         .iter()
         .copied()
-        .filter(|&n| minds.regard(n).abs() >= OPINIONATED)
+        .filter(|&n| minds.regard(n).abs() >= tuning.opinionated)
         .max_by(|&a, &b| minds.regard(a).abs().total_cmp(&minds.regard(b).abs()))
         .map_or(Topic::SmallTalk, |speaker| Topic::Opinion { speaker, attitude: minds.attitude(speaker) })
 }
@@ -72,17 +80,17 @@ mod tests {
         for _ in 0..4 {
             minds.add();
         }
-        assert_eq!(topic(&minds, &[0, 1]), Topic::SmallTalk);
+        assert_eq!(topic(&Tuning::DEFAULT, &minds, &[0, 1]), Topic::SmallTalk);
         minds.saw(&[1], Deed::Shooting, Vector3::zeros());
-        let Topic::News { teller, rumour } = topic(&minds, &[0, 1, 2]) else {
+        let Topic::News { teller, rumour } = topic(&Tuning::DEFAULT, &minds, &[0, 1, 2]) else {
             panic!("news");
         };
         assert_eq!((teller, rumour.deed), (1, Deed::Shooting));
         heard(&mut minds, &[0, 1, 2], Topic::News { teller, rumour });
         assert!(minds.regard(0) < 0.0 && minds.regard(2) < 0.0);
         // All of them know it: they talk of how they feel - the one that saw it, most.
-        assert_eq!(topic(&minds, &[0, 1, 2]), Topic::Opinion { speaker: 1, attitude: Attitude::Hostile });
+        assert_eq!(topic(&Tuning::DEFAULT, &minds, &[0, 1, 2]), Topic::Opinion { speaker: 1, attitude: Attitude::Hostile });
         // One that knows nothing and feels nothing much, with one that does not either.
-        assert_eq!(topic(&minds, &[3, 3]), Topic::SmallTalk);
+        assert_eq!(topic(&Tuning::DEFAULT, &minds, &[3, 3]), Topic::SmallTalk);
     }
 }

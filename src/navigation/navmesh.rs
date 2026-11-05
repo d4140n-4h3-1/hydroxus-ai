@@ -13,7 +13,7 @@
 //!
 //! Once built, the grid can go: everything a route needs is here.
 
-use crate::navigation::grid::{WalkGrid, MAX_CLIMB};
+use crate::navigation::{grid::{self, WalkGrid}, walk};
 use nalgebra::Vector3;
 use std::{
     cmp::Ordering,
@@ -26,6 +26,16 @@ pub const FLAT: f32 = 0.05;
 /// How many cells along a side a polygon has at most: small enough that what is said of one -
 /// that it is a gang's turf, that the enemy can see it - is true of all of it, near enough.
 pub const MOST_CELLS: usize = 16;
+
+tuning!(
+    /// How a navmesh is made from a grid (see the module's constants, its defaults).
+    {
+        /// How far apart the floors of the cells of one polygon can be, in meters.
+        flat: f32 = FLAT,
+        /// How many cells along a side a polygon has at most.
+        most_cells: usize = MOST_CELLS,
+    }
+);
 /// How many cells across each square of the index of where the polygons are is.
 const BUCKET: usize = 32;
 
@@ -89,6 +99,11 @@ pub struct NavMesh {
     /// The cells opened or shut since it last caught up (see [`NavMesh::sync`]): open, with their
     /// floor and area, or shut.
     pending: HashMap<usize, Option<(f32, u8)>>,
+    /// How it was made from its grid, and how the ground is taken, as the grid's was (see
+    /// [`grid::Tuning`]); and how those that walk it go about it (see [`walk`]).
+    pub made: Tuning,
+    pub ground: grid::Tuning,
+    pub walk: walk::Tuning,
 }
 
 /// A side of a polygon: the cells along it inside, and the step out across it.
@@ -134,7 +149,7 @@ type Source<'a> = &'a dyn Fn(usize, usize, usize) -> Option<(f32, u8)>;
 /// The walkable cells `cell` says there are within `[x0, z0, x1, z1)` of the plan, on each of
 /// `storeys`, merged into rectangles each on one storey, its floor level to within [`FLAT`], and
 /// all of one area - but those `kept(storey, x, z)` by others already.
-fn merge(cell: Source, storeys: usize, [bx0, bz0, bx1, bz1]: [usize; 4], kept: &dyn Fn(usize, usize, usize) -> bool) -> Vec<Polygon> {
+fn merge(tuning: &Tuning, cell: Source, storeys: usize, [bx0, bz0, bx1, bz1]: [usize; 4], kept: &dyn Fn(usize, usize, usize) -> bool) -> Vec<Polygon> {
     let (w, d) = (bx1 - bx0, bz1 - bz0);
     let mut polygons = Vec::new();
     let mut taken = vec![0u64; (w * d).div_ceil(64)];
@@ -155,14 +170,14 @@ fn merge(cell: Source, storeys: usize, [bx0, bz0, bx1, bz1]: [usize; 4], kept: &
                 let fits = |taken: &[u64], cx: usize, cz: usize| {
                     !is_taken(taken, cx, cz)
                         && !kept(storey, cx, cz)
-                        && cell(storey, cx, cz).is_some_and(|(f, k)| (f - floor).abs() <= FLAT && k == kind)
+                        && cell(storey, cx, cz).is_some_and(|(f, k)| (f - floor).abs() <= tuning.flat && k == kind)
                 };
                 let mut x1 = x + 1;
-                while x1 < bx1 && x1 - x < MOST_CELLS && fits(&taken, x1, z) {
+                while x1 < bx1 && x1 - x < tuning.most_cells && fits(&taken, x1, z) {
                     x1 += 1;
                 }
                 let mut z1 = z + 1;
-                while z1 < bz1 && z1 - z < MOST_CELLS && (x..x1).all(|cx| fits(&taken, cx, z1)) {
+                while z1 < bz1 && z1 - z < tuning.most_cells && (x..x1).all(|cx| fits(&taken, cx, z1)) {
                     z1 += 1;
                 }
                 for cz in z..z1 {
@@ -193,17 +208,22 @@ impl NavMesh {
     /// rectangles of one storey, a level floor and one `area` - as `area` says of each cell, by
     /// `(x, row)` - and joined where a step can be taken from one into the next.
     pub fn build(grid: &WalkGrid, origin: Vector3<f32>, area: impl Fn(usize, usize) -> u8) -> Self {
-        Self::build_by(grid, origin, &area)
+        Self::build_by(grid, origin, &area, Tuning::DEFAULT)
+    }
+
+    /// [`NavMesh::build`], made as `made` says.
+    pub fn build_with(grid: &WalkGrid, origin: Vector3<f32>, area: impl Fn(usize, usize) -> u8, made: Tuning) -> Self {
+        Self::build_by(grid, origin, &area, made)
     }
 
     /// [`NavMesh::build`], not generic (see [`NavMesh::route_by`]).
-    fn build_by(grid: &WalkGrid, origin: Vector3<f32>, area: &dyn Fn(usize, usize) -> u8) -> Self {
+    fn build_by(grid: &WalkGrid, origin: Vector3<f32>, area: &dyn Fn(usize, usize) -> u8, made: Tuning) -> Self {
         let (width, depth) = (grid.width, grid.depth);
         let cell = |storey: usize, x: usize, z: usize| {
             let row = z + storey * depth;
             grid.is_walkable(x, row).then(|| (grid.floor(x, row), area(x, row)))
         };
-        let polygons = merge(&cell, grid.storeys, [0, 0, width, depth], &|_, _, _| false);
+        let polygons = merge(&made, &cell, grid.storeys, [0, 0, width, depth], &|_, _, _| false);
         let mut mesh = Self {
             origin,
             cell_size: grid.cell_size,
@@ -217,6 +237,9 @@ impl NavMesh {
             storeys: grid.storeys,
             closed: HashMap::new(),
             pending: HashMap::new(),
+            made,
+            ground: grid.tuning,
+            walk: walk::Tuning::DEFAULT,
         };
         for n in 0..mesh.polygons.len() {
             mesh.index(n as Poly);
@@ -323,7 +346,7 @@ impl NavMesh {
             .filter(|&m| m != from)
             .filter(|&m| {
                 let q = &self.polygons[m as usize];
-                (q.x0..q.x1).contains(&(x as u32)) && (q.z0..q.z1).contains(&(z as u32)) && (q.floor - floor).abs() <= MAX_CLIMB
+                (q.x0..q.x1).contains(&(x as u32)) && (q.z0..q.z1).contains(&(z as u32)) && (q.floor - floor).abs() <= self.ground.max_climb
             })
             .min_by(|&a, &b| (self.polygons[a as usize].floor - floor).abs().total_cmp(&(self.polygons[b as usize].floor - floor).abs()))
     }
@@ -435,7 +458,7 @@ impl NavMesh {
             self.garbage += p.count as usize;
             *p = Polygon { x1: p.x0, z1: p.z0, count: 0, ..*p };
         }
-        let made = merge(&cell, self.storeys, bounds, &kept);
+        let made = merge(&self.made, &cell, self.storeys, bounds, &kept);
         let first = self.polygons.len() as Poly;
         for polygon in made {
             self.polygons.push(polygon);
@@ -553,7 +576,7 @@ impl NavMesh {
                 (p.x0..p.x1).contains(&x) && (p.z0..p.z1).contains(&z)
             })
             .map(|n| (n, (self.floor_of(n) - at.y).abs()))
-            .filter(|&(_, off)| off <= crate::navigation::grid::LEVEL)
+            .filter(|&(_, off)| off <= self.ground.level)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(n, _)| n)
     }
@@ -575,7 +598,7 @@ impl NavMesh {
             let (x, z) = ((at.x - self.origin.x) / cs, (at.z - self.origin.z) / cs);
             let dx = (p.x0 as f32 - x).max(x - p.x1 as f32).max(0.0);
             let dz = (p.z0 as f32 - z).max(z - p.z1 as f32).max(0.0);
-            dx.hypot(dz) + (self.floor_of(n) - at.y).abs() / crate::navigation::grid::LEVEL * crate::navigation::grid::STOREY_AWAY
+            dx.hypot(dz) + (self.floor_of(n) - at.y).abs() / self.ground.level * self.ground.storey_away
         };
         let mut best: Option<(Poly, f32)> = None;
         for ring in 0..cols.max(rows) {
@@ -838,7 +861,7 @@ impl NavMesh {
         let samples = (span / self.cell_size * 3.0).ceil().max(1.0) as usize;
         (0..=samples).all(|i| {
             let p = a + (b - a) * (i as f32 / samples as f32);
-            self.over_spot(p).into_iter().any(|n| (self.floor_of(n) - p.y).abs() <= crate::navigation::grid::LEVEL)
+            self.over_spot(p).into_iter().any(|n| (self.floor_of(n) - p.y).abs() <= self.ground.level)
         })
     }
 
@@ -916,7 +939,7 @@ impl NavMesh {
             let n = here?;
             let plan = (x.checked_add_signed(dx)?, z.checked_add_signed(dz)?);
             let to = match self.over(plan, storey) {
-                Some(same) if same == n || (self.polygons[same as usize].floor - self.polygons[n as usize].floor).abs() <= MAX_CLIMB => same,
+                Some(same) if same == n || (self.polygons[same as usize].floor - self.polygons[n as usize].floor).abs() <= self.ground.max_climb => same,
                 _ => self.step_onto(plan, self.polygons[n as usize].floor, n)?,
             };
             Some((plan.0, plan.1 + self.polygons[to as usize].storey as usize * self.depth))

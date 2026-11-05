@@ -17,6 +17,15 @@ pub const ROAD_COST: f32 = 20.0;
 /// that their routes go round it.
 pub const TURF_COST: f32 = 3.0;
 
+tuning!(
+    /// How dear a wanderer counts the roads and the gangs' turf (see the module's constants, its
+    /// defaults).
+    {
+        road_cost: f32 = ROAD_COST,
+        turf_cost: f32 = TURF_COST,
+    }
+);
+
 /// As [`plan`], a trip for an NPC going about its business from `feet`, `trip` meters away as the
 /// crow flies - but keeping off the polygons of `mesh` that are `road` (crossings are not), if
 /// there are roads, off the `turfs` of the groups that keep to one - each a spot and how many
@@ -24,6 +33,7 @@ pub const TURF_COST: f32 = 3.0;
 /// them, the way that crosses them least (see [`plan_avoiding`]). One that finds itself on a road,
 /// as it might after a chase, gets off it the shortest way. Empty, with nowhere found to go.
 pub fn wander(
+    tuning: &Tuning,
     mesh: &NavMesh,
     feet: Vector3<f32>,
     trip: (f32, f32),
@@ -49,8 +59,8 @@ pub fn wander(
         trip,
         |n| road(n) || on_turf(n) || !reachable.can(n as usize),
         |n| {
-            let dear = if on_road || !road(n) { 0.0 } else { ROAD_COST };
-            dear + if on_turf(n) { TURF_COST } else { 0.0 }
+            let dear = if on_road || !road(n) { 0.0 } else { tuning.road_cost };
+            dear + if on_turf(n) { tuning.turf_cost } else { 0.0 }
         },
         rng,
     )
@@ -81,7 +91,7 @@ mod tests {
         let mut rng = Rng::new(11);
         let mut crossed = 0;
         for _ in 0..40 {
-            let route = wander(&mesh, Vector3::new(2.0, 0.12, 2.0), (5.0, 15.0), Some(&road), &[], &Reach::default(), &mut rng);
+            let route = wander(&Tuning::DEFAULT, &mesh, Vector3::new(2.0, 0.12, 2.0), (5.0, 15.0), Some(&road), &[], &Reach::default(), &mut rng);
             assert!(!route.is_empty());
             // Its corners, and the way between them, off the road but at the crossing.
             let mut at = Vector3::new(2.0, 0.12, 2.0);
@@ -96,7 +106,7 @@ mod tests {
         }
         assert!(crossed > 0, "it does cross, at the crossing");
         // On the road, it gets off it.
-        let route = wander(&mesh, Vector3::new(10.0, 0.0, 2.0), (5.0, 15.0), Some(&road), &[], &Reach::default(), &mut rng);
+        let route = wander(&Tuning::DEFAULT, &mesh, Vector3::new(10.0, 0.0, 2.0), (5.0, 15.0), Some(&road), &[], &Reach::default(), &mut rng);
         assert!(!mesh.poly_at(route[0]).is_some_and(road));
     }
 
@@ -117,7 +127,7 @@ mod tests {
         let turfs = [(spot, 3.0)];
         let mut rng = Rng::new(5);
         for _ in 0..40 {
-            let route = wander(&mesh, Vector3::new(2.0, 0.12, 2.0), (5.0, 15.0), Some(&road), &turfs, &Reach::default(), &mut rng);
+            let route = wander(&Tuning::DEFAULT, &mesh, Vector3::new(2.0, 0.12, 2.0), (5.0, 15.0), Some(&road), &turfs, &Reach::default(), &mut rng);
             if let Some(end) = route.first() {
                 assert!(flat(end - spot).norm() >= 3.0, "makes for {end:?}, on the turf");
             }
@@ -141,14 +151,14 @@ mod tests {
         let reach = Reach::of((0..mesh.len()).map(|n| mesh.polygon(n as Poly).x1 <= 25));
         let (mut rng, mut went) = (Rng::new(3), 0);
         for _ in 0..60 {
-            let route = wander(&mesh, Vector3::new(2.0, 0.0, 5.0), (10.0, 30.0), Some(&road), &[], &reach, &mut rng);
+            let route = wander(&Tuning::DEFAULT, &mesh, Vector3::new(2.0, 0.0, 5.0), (10.0, 30.0), Some(&road), &[], &reach, &mut rng);
             assert!(route.iter().all(|at| at.x < 25.0), "set off for the far side: {route:?}");
             went += !route.is_empty() as u32;
         }
         assert!(went > 0, "it goes somewhere");
         // Not kept off it, it does go there now and then.
         let anywhere = (0..60).any(|_| {
-            wander(&mesh, Vector3::new(2.0, 0.0, 5.0), (10.0, 30.0), Some(&road), &[], &Reach::default(), &mut rng)
+            wander(&Tuning::DEFAULT, &mesh, Vector3::new(2.0, 0.0, 5.0), (10.0, 30.0), Some(&road), &[], &Reach::default(), &mut rng)
                 .iter()
                 .any(|at| at.x >= 25.0)
         });

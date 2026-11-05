@@ -17,10 +17,23 @@ pub const CLOSE_IN: f32 = 4.0;
 /// How far ahead one running makes for, in meters, each time it looks again where to go.
 pub const FLEE_AHEAD: f32 = 25.0;
 
+tuning!(
+    /// How NPCs chase and run (see the module's constants, its defaults).
+    {
+        /// How far ahead of whoever it is after one cuts them off, at most, and how near it goes
+        /// straight at them instead, in meters.
+        cut_off: f32 = CUT_OFF,
+        close_in: f32 = CLOSE_IN,
+        /// How far ahead one running makes for, in meters.
+        flee_ahead: f32 = FLEE_AHEAD,
+    }
+);
+
 /// Where one `away` meters from `them`, who are `going` that way, makes for to cut them off -
 /// unless it is the `nearest` of those after them, or near enough to go straight at them, or the
 /// floor does not carry on that far (`floor_at`): none, then.
 pub fn cut_off(
+    tuning: &Tuning,
     them: Vector3<f32>,
     going: Option<Vector3<f32>>,
     away: f32,
@@ -28,9 +41,9 @@ pub fn cut_off(
     floor_at: impl Fn(Vector3<f32>) -> bool,
 ) -> Option<Vector3<f32>> {
     going
-        .filter(|_| !nearest && away > CLOSE_IN)
+        .filter(|_| !nearest && away > tuning.close_in)
         .and_then(|going| going.try_normalize(1.0e-3))
-        .map(|going| them + going * (away * 0.6).min(CUT_OFF))
+        .map(|going| them + going * (away * 0.6).min(tuning.cut_off))
         .filter(|&ahead| (1..=4).all(|i| floor_at(them + (ahead - them) * (i as f32 / 4.0))))
 }
 
@@ -38,13 +51,14 @@ pub fn cut_off(
 /// ground - makes for, over `mesh`: on the floor near
 /// [`FLEE_AHEAD`] meters on, or that far on if there is none.
 pub fn flee_to(
+    tuning: &Tuning,
     mesh: &NavMesh,
     feet: Vector3<f32>,
     away: Vector3<f32>,
     rng: &mut Rng,
 ) -> Vector3<f32> {
-    let ahead = feet + away * FLEE_AHEAD;
-    spot_near(mesh, ahead, FLEE_AHEAD * 0.4, rng).unwrap_or(ahead)
+    let ahead = feet + away * tuning.flee_ahead;
+    spot_near(mesh, ahead, tuning.flee_ahead * 0.4, rng).unwrap_or(ahead)
 }
 
 #[cfg(test)]
@@ -56,11 +70,11 @@ mod tests {
         let them = Vector3::new(0.0, 0.0, 0.0);
         let going = Some(Vector3::new(0.0, 0.0, 3.0));
         let floor = |_: Vector3<f32>| true;
-        assert_eq!(cut_off(them, going, 10.0, false, floor), Some(Vector3::new(0.0, 0.0, 6.0)));
-        assert_eq!(cut_off(them, going, 40.0, false, floor), Some(Vector3::new(0.0, 0.0, CUT_OFF)));
-        assert_eq!(cut_off(them, going, 10.0, true, floor), None);
-        assert_eq!(cut_off(them, going, CLOSE_IN - 1.0, false, floor), None);
-        assert_eq!(cut_off(them, None, 10.0, false, floor), None);
-        assert_eq!(cut_off(them, going, 10.0, false, |at: Vector3<f32>| at.z < 3.0), None);
+        assert_eq!(cut_off(&Tuning::DEFAULT, them, going, 10.0, false, floor), Some(Vector3::new(0.0, 0.0, 6.0)));
+        assert_eq!(cut_off(&Tuning::DEFAULT, them, going, 40.0, false, floor), Some(Vector3::new(0.0, 0.0, CUT_OFF)));
+        assert_eq!(cut_off(&Tuning::DEFAULT, them, going, 10.0, true, floor), None);
+        assert_eq!(cut_off(&Tuning::DEFAULT, them, going, CLOSE_IN - 1.0, false, floor), None);
+        assert_eq!(cut_off(&Tuning::DEFAULT, them, None, 10.0, false, floor), None);
+        assert_eq!(cut_off(&Tuning::DEFAULT, them, going, 10.0, false, |at: Vector3<f32>| at.z < 3.0), None);
     }
 }

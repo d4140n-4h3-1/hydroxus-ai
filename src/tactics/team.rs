@@ -55,6 +55,40 @@ pub const SIDESTEP: f32 = 2.5;
 pub const COVERING_NEAR: f32 = 30.0;
 pub const GO_ANYWAY: f32 = 0.25;
 
+tuning!(
+    /// How a side fights as a team (see the module's constants, its defaults).
+    {
+        /// How long what it saw of an enemy is worth acting on, in seconds.
+        intel_time: f32 = INTEL_TIME,
+        /// How often it works out the ground its enemies see, in seconds; how much dearer a meter
+        /// of it counts for each that sees it; and how far off they see, in meters.
+        exposure_every: f32 = EXPOSURE_EVERY,
+        exposure_cost: f32 = EXPOSURE_COST,
+        exposure_range: f32 = EXPOSURE_RANGE,
+        /// How far round a flanker goes, in radians, and how far from the enemy, in meters.
+        flank_angle: f32 = FLANK_ANGLE,
+        flank_distance: f32 = FLANK_DISTANCE,
+        /// How near a teammate makes cover crowded, in meters; and how much worse crowded cover,
+        /// and cover another enemy sees, counts.
+        crowded: f32 = CROWDED,
+        crowded_cost: f32 = CROWDED_COST,
+        seen_cost: f32 = SEEN_COST,
+        /// How recently an enemy was seen to fire at where it was, in seconds; and how near a bolt
+        /// keeps one down, in meters, and for how long, in seconds.
+        suppress_seen: f32 = SUPPRESS_SEEN,
+        suppress_near: f32 = SUPPRESS_NEAR,
+        suppressed_for: f32 = SUPPRESSED_FOR,
+        /// How far one has to get in how long, in meters and seconds, not to be stuck.
+        stuck: (f32, f32) = STUCK,
+        /// How far one with no cover sidesteps, in meters.
+        sidestep: f32 = SIDESTEP,
+        /// How near a teammate covers one moving, in meters, and how often one with none
+        /// covering it goes anyway.
+        covering_near: f32 = COVERING_NEAR,
+        go_anyway: f32 = GO_ANYWAY,
+    }
+);
+
 /// What a team knows of where its enemies are: for each, by index, where it was last seen and
 /// how long ago, in seconds.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -102,20 +136,20 @@ impl Intel {
     }
 
     /// Where the enemies `alive` says are, as far as it is worth acting on (see [`INTEL_TIME`]).
-    pub fn known(&self, alive: impl Fn(usize) -> bool) -> Vec<Vector3<f32>> {
-        self.seen_within(INTEL_TIME, alive).map(|(_, at)| at).collect()
+    pub fn known(&self, tuning: &Tuning, alive: impl Fn(usize) -> bool) -> Vec<Vector3<f32>> {
+        self.seen_within(tuning.intel_time, alive).map(|(_, at)| at).collect()
     }
 
     /// Where the nearest enemy to `me` is believed to be, of those `alive` says are.
-    pub fn nearest(&self, me: Vector3<f32>, alive: impl Fn(usize) -> bool) -> Option<Vector3<f32>> {
-        self.seen_within(INTEL_TIME, alive).map(|(_, at)| at).min_by(|a, b| (a - me).norm().total_cmp(&(b - me).norm()))
+    pub fn nearest(&self, tuning: &Tuning, me: Vector3<f32>, alive: impl Fn(usize) -> bool) -> Option<Vector3<f32>> {
+        self.seen_within(tuning.intel_time, alive).map(|(_, at)| at).min_by(|a, b| (a - me).norm().total_cmp(&(b - me).norm()))
     }
 
     /// The nearest enemy to `me` seen lately enough to fire at where it was (see
     /// [`SUPPRESS_SEEN`]), and near enough ([`EXPOSURE_RANGE`]): which, and where it stood.
-    pub fn recently_seen(&self, me: Vector3<f32>, alive: impl Fn(usize) -> bool) -> Option<(usize, Vector3<f32>)> {
-        self.seen_within(SUPPRESS_SEEN, alive)
-            .filter(|(_, at)| (at - me).norm() < EXPOSURE_RANGE)
+    pub fn recently_seen(&self, tuning: &Tuning, me: Vector3<f32>, alive: impl Fn(usize) -> bool) -> Option<(usize, Vector3<f32>)> {
+        self.seen_within(tuning.suppress_seen, alive)
+            .filter(|(_, at)| (at - me).norm() < tuning.exposure_range)
             .min_by(|a, b| (a.1 - me).norm().total_cmp(&(b.1 - me).norm()))
     }
 }
@@ -129,7 +163,7 @@ impl Exposure {
     /// Works it out over `mesh` for enemies standing at `enemies`: each that is within
     /// [`EXPOSURE_RANGE`] of the chest - `chest` meters over the floor - of one standing in the
     /// middle of a polygon, and that `sees` it there from where it stands.
-    pub fn survey(mesh: &NavMesh, enemies: &[Vector3<f32>], chest: f32, sees: impl Fn(Vector3<f32>, Vector3<f32>) -> bool) -> Self {
+    pub fn survey(tuning: &Tuning, mesh: &NavMesh, enemies: &[Vector3<f32>], chest: f32, sees: impl Fn(Vector3<f32>, Vector3<f32>) -> bool) -> Self {
         let mut seen = HashMap::new();
         if enemies.is_empty() {
             return Self(seen);
@@ -141,7 +175,7 @@ impl Exposure {
             let at = mesh.centre(n) + Vector3::y() * chest;
             let seeing = enemies
                 .iter()
-                .filter(|&&enemy| (enemy - at).norm() < EXPOSURE_RANGE)
+                .filter(|&&enemy| (enemy - at).norm() < tuning.exposure_range)
                 .filter(|&&enemy| sees(enemy, at))
                 .count();
             if seeing > 0 {
@@ -162,8 +196,8 @@ impl Exposure {
     }
 
     /// How much dearer a meter across polygon `n` is, for a route that keeps out of their sight.
-    pub fn cost(&self, n: Poly) -> f32 {
-        self.at(n) as f32 * EXPOSURE_COST
+    pub fn cost(&self, tuning: &Tuning, n: Poly) -> f32 {
+        self.at(n) as f32 * tuning.exposure_cost
     }
 }
 
@@ -202,8 +236,8 @@ pub fn cover_rank(cost: f32, distance: f32, retreat: bool) -> Option<f32> {
 
 /// How good cover of `rank` (see [`cover_rank`]) is, `seen` by so many enemies other than the one
 /// it is taken from, and `crowded` by a teammate within [`CROWDED`] or not - the less the better.
-pub fn cover_worth(rank: f32, seen: usize, crowded: bool) -> f32 {
-    rank + seen as f32 * SEEN_COST + if crowded { CROWDED_COST } else { 0.0 }
+pub fn cover_worth(tuning: &Tuning, rank: f32, seen: usize, crowded: bool) -> f32 {
+    rank + seen as f32 * tuning.seen_cost + if crowded { tuning.crowded_cost } else { 0.0 }
 }
 
 /// Where one at `me`, going round the `side` (1 or -1) against a `threat`, makes for: off to that
@@ -211,6 +245,7 @@ pub fn cover_worth(rank: f32, seen: usize, crowded: bool) -> f32 {
 /// [`FLANK_DISTANCE`] from it, on the floor of `mesh` nearest there. None if it is
 /// close enough already to go straight at them.
 pub fn flank_point(
+    tuning: &Tuning,
     mesh: &NavMesh,
     me: Vector3<f32>,
     mates: &[Vector3<f32>],
@@ -219,7 +254,7 @@ pub fn flank_point(
 ) -> Option<Vector3<f32>> {
     let middle = mates.iter().sum::<Vector3<f32>>() / mates.len().max(1) as f32;
     let from_threat = heading_of(middle - threat)?;
-    let point = threat + forward(from_threat + side * FLANK_ANGLE) * FLANK_DISTANCE;
+    let point = threat + forward(from_threat + side * tuning.flank_angle) * tuning.flank_distance;
     let there = mesh.nearest(point).map(|n| mesh.closest_point(n, point))?;
     (flat(there - me).norm() > 3.0).then_some(there)
 }
@@ -227,22 +262,23 @@ pub fn flank_point(
 /// Where one at `me`, with no cover to be had from `threat`, steps aside to, across the line from
 /// it, to the `side` (1 or -1): on the floor of `mesh` there, or nearest it.
 pub fn sidestep_to(
+    tuning: &Tuning,
     mesh: &NavMesh,
     me: Vector3<f32>,
     threat: Vector3<f32>,
     side: f32,
 ) -> Option<Vector3<f32>> {
     let across = flat(threat - me).try_normalize(1.0e-3).map(steer::right_of)?;
-    let to = me + across * side * SIDESTEP;
+    let to = me + across * side * tuning.sidestep;
     mesh.nearest(to).map(|n| mesh.closest_point(n, to))
 }
 
 /// Whether one at `me` moves on from cover: with a teammate near enough of `mates` - each where it
 /// is, and whether it is firing - firing to cover it, or none near enough to; or else
 /// [`GO_ANYWAY`] of the times, as `roll`, from 0 to 1, says.
-pub fn covered(me: Vector3<f32>, mates: impl IntoIterator<Item = (Vector3<f32>, bool)>, roll: f32) -> bool {
-    let near: Vec<bool> = mates.into_iter().filter(|(at, _)| (at - me).norm() < COVERING_NEAR).map(|(_, firing)| firing).collect();
-    near.is_empty() || near.contains(&true) || roll < GO_ANYWAY
+pub fn covered(tuning: &Tuning, me: Vector3<f32>, mates: impl IntoIterator<Item = (Vector3<f32>, bool)>, roll: f32) -> bool {
+    let near: Vec<bool> = mates.into_iter().filter(|(at, _)| (at - me).norm() < tuning.covering_near).map(|(_, firing)| firing).collect();
+    near.is_empty() || near.contains(&true) || roll < tuning.go_anyway
 }
 
 /// Getting somewhere, or not: where it was when it last got anywhere, and how long ago.
@@ -260,11 +296,11 @@ impl Stuck {
 
     /// Moves it on `dt` to one now `here`: whether it is stuck, having got no more than
     /// [`STUCK`]'s distance in its time - and starts afresh if so.
-    pub fn step(&mut self, here: Vector3<f32>, dt: f32) -> bool {
-        if flat(here - self.from).norm() > STUCK.0 {
+    pub fn step(&mut self, tuning: &Tuning, here: Vector3<f32>, dt: f32) -> bool {
+        if flat(here - self.from).norm() > tuning.stuck.0 {
             *self = Self::at(here);
             false
-        } else if self.since + dt > STUCK.1 {
+        } else if self.since + dt > tuning.stuck.1 {
             *self = Self::at(here);
             true
         } else {
@@ -294,15 +330,15 @@ mod tests {
         intel.saw(0, Vector3::new(10.0, 0.0, 0.0));
         intel.saw(2, Vector3::new(3.0, 0.0, 0.0));
         let alive = |_| true;
-        assert_eq!(intel.nearest(Vector3::zeros(), alive), Some(Vector3::new(3.0, 0.0, 0.0)));
-        assert_eq!(intel.recently_seen(Vector3::zeros(), alive).map(|(j, _)| j), Some(2));
+        assert_eq!(intel.nearest(&Tuning::DEFAULT, Vector3::zeros(), alive), Some(Vector3::new(3.0, 0.0, 0.0)));
+        assert_eq!(intel.recently_seen(&Tuning::DEFAULT, Vector3::zeros(), alive).map(|(j, _)| j), Some(2));
         intel.age(SUPPRESS_SEEN + 0.1);
-        assert_eq!(intel.recently_seen(Vector3::zeros(), alive), None, "too long ago to fire at");
-        assert_eq!(intel.known(alive).len(), 2);
-        assert_eq!(intel.nearest(Vector3::zeros(), |j| j != 2), Some(Vector3::new(10.0, 0.0, 0.0)));
+        assert_eq!(intel.recently_seen(&Tuning::DEFAULT, Vector3::zeros(), alive), None, "too long ago to fire at");
+        assert_eq!(intel.known(&Tuning::DEFAULT, alive).len(), 2);
+        assert_eq!(intel.nearest(&Tuning::DEFAULT, Vector3::zeros(), |j| j != 2), Some(Vector3::new(10.0, 0.0, 0.0)));
         intel.forget(0);
         intel.age(INTEL_TIME);
-        assert!(intel.known(alive).is_empty());
+        assert!(intel.known(&Tuning::DEFAULT, alive).is_empty());
     }
 
     #[test]
@@ -321,12 +357,12 @@ mod tests {
         let mesh = open(40);
         let enemy = Vector3::new(2.0, 1.5, 2.0);
         // It sees only the ground with z under 20.
-        let exposure = Exposure::survey(&mesh, &[enemy], 1.2, |_, at| at.z < 20.0);
+        let exposure = Exposure::survey(&Tuning::DEFAULT, &mesh, &[enemy], 1.2, |_, at| at.z < 20.0);
         let near = mesh.poly_at(Vector3::new(4.5, 0.0, 4.5)).unwrap();
         let far = mesh.poly_at(Vector3::new(4.5, 0.0, 32.5)).unwrap();
         assert_eq!(exposure.at(near), 1);
         assert_eq!(exposure.at(far), 0);
-        assert_eq!(exposure.cost(near), EXPOSURE_COST);
+        assert_eq!(exposure.cost(&Tuning::DEFAULT, near), EXPOSURE_COST);
         assert!(Exposure::default().is_empty() && !exposure.is_empty());
     }
 
@@ -336,8 +372,8 @@ mod tests {
         assert_eq!(cover_rank(0.0, 3.0, false), None);
         assert!(cover_rank(4.0, 16.0, false) < cover_rank(4.0, 30.0, false));
         assert!(cover_rank(4.0, 30.0, true) < cover_rank(4.0, 16.0, true));
-        assert!(cover_worth(1.0, 0, false) < cover_worth(1.0, 0, true));
-        assert!(cover_worth(1.0, 0, true) < cover_worth(1.0, 1, false));
+        assert!(cover_worth(&Tuning::DEFAULT, 1.0, 0, false) < cover_worth(&Tuning::DEFAULT, 1.0, 0, true));
+        assert!(cover_worth(&Tuning::DEFAULT, 1.0, 0, true) < cover_worth(&Tuning::DEFAULT, 1.0, 1, false));
     }
 
     #[test]
@@ -346,13 +382,13 @@ mod tests {
         let threat = Vector3::new(40.0, 0.0, 60.0);
         let mates = [Vector3::new(38.0, 0.0, 20.0), Vector3::new(42.0, 0.0, 20.0)];
         let me = Vector3::new(40.0, 0.0, 20.0);
-        let left = flank_point(ground, me, &mates, threat, 1.0).unwrap();
-        let right = flank_point(ground, me, &mates, threat, -1.0).unwrap();
+        let left = flank_point(&Tuning::DEFAULT, ground, me, &mates, threat, 1.0).unwrap();
+        let right = flank_point(&Tuning::DEFAULT, ground, me, &mates, threat, -1.0).unwrap();
         assert!((flat(left - threat).norm() - FLANK_DISTANCE).abs() < 1.5);
         assert!((left.x - 40.0) * (right.x - 40.0) < 0.0, "either side: {left:?} {right:?}");
         // Already there: none.
-        assert_eq!(flank_point(ground, left, &mates, threat, 1.0), None);
-        let step = sidestep_to(ground, me, threat, 1.0).unwrap();
+        assert_eq!(flank_point(&Tuning::DEFAULT, ground, left, &mates, threat, 1.0), None);
+        let step = sidestep_to(&Tuning::DEFAULT, ground, me, threat, 1.0).unwrap();
         assert!((flat(step - me).norm() - SIDESTEP).abs() < 1.0 && (step.z - me.z).abs() < 1.0);
     }
 
@@ -360,19 +396,19 @@ mod tests {
     fn it_moves_on_under_covering_fire_or_alone() {
         let me = Vector3::zeros();
         let near = Vector3::new(5.0, 0.0, 0.0);
-        assert!(covered(me, [], 0.9));
-        assert!(covered(me, [(near, true)], 0.9));
-        assert!(!covered(me, [(near, false)], 0.9));
-        assert!(covered(me, [(near, false)], 0.1), "now and then anyway");
-        assert!(covered(me, [(Vector3::new(50.0, 0.0, 0.0), false)], 0.9), "none near enough");
+        assert!(covered(&Tuning::DEFAULT, me, [], 0.9));
+        assert!(covered(&Tuning::DEFAULT, me, [(near, true)], 0.9));
+        assert!(!covered(&Tuning::DEFAULT, me, [(near, false)], 0.9));
+        assert!(covered(&Tuning::DEFAULT, me, [(near, false)], 0.1), "now and then anyway");
+        assert!(covered(&Tuning::DEFAULT, me, [(Vector3::new(50.0, 0.0, 0.0), false)], 0.9), "none near enough");
     }
 
     #[test]
     fn getting_nowhere_for_a_while_it_is_stuck() {
         let mut stuck = Stuck::at(Vector3::zeros());
-        assert!(!stuck.step(Vector3::zeros(), STUCK.1 - 0.5));
-        assert!(stuck.step(Vector3::zeros(), 1.0));
-        assert!(!stuck.step(Vector3::zeros(), 1.0), "afresh");
-        assert!(!stuck.step(Vector3::new(1.0, 0.0, 0.0), STUCK.1), "it got somewhere");
+        assert!(!stuck.step(&Tuning::DEFAULT, Vector3::zeros(), STUCK.1 - 0.5));
+        assert!(stuck.step(&Tuning::DEFAULT, Vector3::zeros(), 1.0));
+        assert!(!stuck.step(&Tuning::DEFAULT, Vector3::zeros(), 1.0), "afresh");
+        assert!(!stuck.step(&Tuning::DEFAULT, Vector3::new(1.0, 0.0, 0.0), STUCK.1), "it got somewhere");
     }
 }

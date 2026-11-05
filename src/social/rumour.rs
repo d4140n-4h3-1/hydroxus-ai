@@ -7,7 +7,7 @@
 //! turns up afresh - one of a city's crowd, say - has heard what the town is talking about, at
 //! [`NEWS`] of its strength.
 
-use crate::social::opinion::{attitude, Attitude, Deed, REGARD_HALF_LIFE};
+use crate::social::opinion::{self, attitude, Attitude, Deed};
 use nalgebra::Vector3;
 
 /// How strong a rumour is once told on, of the teller's; how much a rumour moves a hearer's
@@ -25,6 +25,26 @@ pub const KEPT: usize = 5;
 /// How far a hearer's regard moves towards a speaker's, of the difference, hearing what it
 /// thinks of the player.
 pub const SWAYED: f32 = 0.15;
+
+tuning!(
+    /// How rumours of the player go round (see the module's constants, its defaults).
+    {
+        /// How strong a rumour is retold, of how strong it was; how much hearsay moves regard, of
+        /// seeing it; and how strong news is to one turned up afresh.
+        retell: f32 = RETELL,
+        hearsay: f32 = HEARSAY,
+        news: f32 = NEWS,
+        /// How strong a rumour has to be to be told, and under which it is forgotten.
+        tellable: f32 = TELLABLE,
+        forgotten: f32 = FORGOTTEN,
+        /// How long a rumour takes to fade halfway, in seconds.
+        fade_half_life: f32 = FADE_HALF_LIFE,
+        /// How many rumours each keeps.
+        kept: usize = KEPT,
+        /// How far one is swayed towards another's regard, talking.
+        swayed: f32 = SWAYED,
+    }
+);
 
 /// Something the player did, as one NPC knows it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,9 +68,9 @@ pub struct Mind {
 }
 
 impl Mind {
-    /// How it takes the player.
-    pub fn attitude(&self) -> Attitude {
-        attitude(self.regard)
+    /// How it takes the player, as `opinion` has regard taken.
+    pub fn attitude(&self, opinion: &opinion::Tuning) -> Attitude {
+        attitude(opinion, self.regard)
     }
 
     /// What it knows of them, strongest first.
@@ -66,11 +86,11 @@ impl Mind {
         self.regard = (self.regard + by).clamp(-1.0, 1.0);
     }
 
-    fn learn(&mut self, rumour: Rumour) {
+    fn learn(&mut self, rumour: Rumour, kept: usize) {
         self.known.retain(|r| r.id != rumour.id);
         self.known.push(rumour);
         self.known.sort_by(|a, b| b.strength.total_cmp(&a.strength));
-        self.known.truncate(KEPT);
+        self.known.truncate(kept);
     }
 }
 
@@ -78,6 +98,9 @@ impl Mind {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Minds {
     minds: Vec<Mind>,
+    /// How rumours go round, and how regard is taken.
+    pub tuning: Tuning,
+    pub opinion: opinion::Tuning,
     next: u32,
 }
 
@@ -117,7 +140,7 @@ impl Minds {
     }
 
     pub fn attitude(&self, n: usize) -> Attitude {
-        attitude(self.regard(n))
+        attitude(&self.opinion, self.regard(n))
     }
 
     /// `saw`, each of them, the player do `deed` at `at`: their regard moves its whole weight,
@@ -131,7 +154,7 @@ impl Minds {
             };
             mind.feel(deed.weight());
             if deed.spreads() {
-                mind.learn(Rumour { id, deed, at, strength: 1.0, saw: true });
+                mind.learn(Rumour { id, deed, at, strength: 1.0, saw: true }, self.tuning.kept);
             }
         }
         id
@@ -141,22 +164,23 @@ impl Minds {
     /// to be worth telling - if there is one.
     pub fn news(&self, teller: usize, hearer: usize) -> Option<Rumour> {
         let (t, h) = (self.minds.get(teller)?, self.minds.get(hearer)?);
-        t.known.iter().copied().filter(|r| r.strength >= TELLABLE && !h.knows(r.id)).max_by(|a, b| a.strength.total_cmp(&b.strength))
+        t.known.iter().copied().filter(|r| r.strength >= self.tuning.tellable && !h.knows(r.id)).max_by(|a, b| a.strength.total_cmp(&b.strength))
     }
 
     /// The `teller` tells the `hearer` of `rumour`: it knows it, at [`RETELL`] of its strength,
     /// and its regard moves [`HEARSAY`] of the deed's weight, as strong as it heard it. Nothing,
     /// if it knew it already.
     pub fn tell(&mut self, hearer: usize, rumour: Rumour) {
+        let tuning = self.tuning;
         let Some(mind) = self.minds.get_mut(hearer) else {
             return;
         };
         if mind.knows(rumour.id) {
             return;
         }
-        let strength = rumour.strength * RETELL;
-        mind.feel(rumour.deed.weight() * HEARSAY * strength);
-        mind.learn(Rumour { strength, saw: false, ..rumour });
+        let strength = rumour.strength * tuning.retell;
+        mind.feel(rumour.deed.weight() * tuning.hearsay * strength);
+        mind.learn(Rumour { strength, saw: false, ..rumour }, tuning.kept);
     }
 
     /// The `speaker` says what it thinks of the player to the `hearer`, whose regard moves
@@ -164,7 +188,7 @@ impl Minds {
     pub fn share_regard(&mut self, speaker: usize, hearer: usize) {
         let said = self.regard(speaker);
         if let Some(mind) = self.minds.get_mut(hearer) {
-            mind.regard += (said - mind.regard) * SWAYED;
+            mind.regard += (said - mind.regard) * self.tuning.swayed;
         }
     }
 
@@ -190,26 +214,28 @@ impl Minds {
         }
         talk.sort_by(|a, b| b.strength.total_cmp(&a.strength));
         self.minds[n] = Mind::default();
-        for r in talk.into_iter().take(KEPT) {
-            let strength = r.strength * NEWS;
-            if strength >= FORGOTTEN {
+        let tuning = self.tuning;
+        for r in talk.into_iter().take(tuning.kept) {
+            let strength = r.strength * tuning.news;
+            if strength >= tuning.forgotten {
                 let mind = &mut self.minds[n];
-                mind.feel(r.deed.weight() * HEARSAY * strength);
-                mind.learn(Rumour { strength, saw: false, ..r });
+                mind.feel(r.deed.weight() * tuning.hearsay * strength);
+                mind.learn(Rumour { strength, saw: false, ..r }, tuning.kept);
             }
         }
     }
 
     /// Moves everyone on `dt`: rumours fading, and forgotten once too faint; regard easing back.
     pub fn step(&mut self, dt: f32) {
-        let fade = 0.5f32.powf(dt / FADE_HALF_LIFE);
-        let ease = 0.5f32.powf(dt / REGARD_HALF_LIFE);
+        let fade = 0.5f32.powf(dt / self.tuning.fade_half_life);
+        let ease = 0.5f32.powf(dt / self.opinion.regard_half_life);
+        let forgotten = self.tuning.forgotten;
         for mind in &mut self.minds {
             mind.regard *= ease;
             for r in &mut mind.known {
                 r.strength *= fade;
             }
-            mind.known.retain(|r| r.strength >= FORGOTTEN);
+            mind.known.retain(|r| r.strength >= forgotten);
         }
     }
 }

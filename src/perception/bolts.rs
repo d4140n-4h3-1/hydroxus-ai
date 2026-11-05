@@ -13,17 +13,36 @@ pub const NEAR_MISS: f32 = 1.0;
 /// How near a bolt has to fly past, in meters, for an NPC to notice it, if it is in front of it.
 pub const NOTICE_BOLT: f32 = 4.0;
 
+tuning!(
+    /// How near a bolt has to pass to be felt or noticed (see the module's constants, its
+    /// defaults).
+    {
+        /// Felt, wherever it went by, and noticed, in front, in meters from the chest.
+        near_miss: f32 = NEAR_MISS,
+        notice_bolt: f32 = NOTICE_BOLT,
+    }
+);
+
 /// Whether a bolt that came `near` meters from an NPC's chest is felt: close enough to take as
 /// being shot at, wherever it went by.
-pub fn felt(near: f32) -> bool {
-    near <= NEAR_MISS
+pub fn felt(tuning: &Tuning, near: f32) -> bool {
+    near <= tuning.near_miss
 }
 
 /// Whether an NPC at `feet`, facing `heading`, in `alert` - or calm, with none - notices a bolt
-/// that came `near` meters from its chest, nearest at `at`: felt, or seen going by in front.
-pub fn notices(alert: Option<Alert>, feet: Vector3<f32>, heading: f32, near: f32, at: Vector3<f32>) -> bool {
-    felt(near)
-        || near <= NOTICE_BOLT && Sight::default().could_see(alert, feet, heading, at, Stance::Standing, false)
+/// that came `near` meters from its chest, nearest at `at`: felt, or seen going by in front, as
+/// its `sight` sees.
+#[allow(clippy::too_many_arguments)]
+pub fn notices(
+    tuning: &Tuning,
+    sight: &Sight,
+    alert: Option<Alert>,
+    feet: Vector3<f32>,
+    heading: f32,
+    near: f32,
+    at: Vector3<f32>,
+) -> bool {
+    felt(tuning, near) || near <= tuning.notice_bolt && sight.could_see(alert, feet, heading, at, Stance::Standing, false)
 }
 
 #[cfg(test)]
@@ -36,10 +55,10 @@ mod tests {
         // Facing +z.
         let ahead = Vector3::new(0.0, 1.0, 3.0);
         let behind = Vector3::new(0.0, 1.0, -3.0);
-        assert!(notices(None, feet, 0.0, 3.0, ahead));
-        assert!(!notices(None, feet, 0.0, 3.0, behind));
-        assert!(notices(None, feet, 0.0, 0.8, Vector3::new(0.0, 1.0, -0.8)));
-        assert!(!notices(None, feet, 0.0, 5.0, ahead));
-        assert!(felt(NEAR_MISS) && !felt(NEAR_MISS + 0.1));
+        assert!(notices(&Tuning::DEFAULT, &Sight::default(), None, feet, 0.0, 3.0, ahead));
+        assert!(!notices(&Tuning::DEFAULT, &Sight::default(), None, feet, 0.0, 3.0, behind));
+        assert!(notices(&Tuning::DEFAULT, &Sight::default(), None, feet, 0.0, 0.8, Vector3::new(0.0, 1.0, -0.8)));
+        assert!(!notices(&Tuning::DEFAULT, &Sight::default(), None, feet, 0.0, 5.0, ahead));
+        assert!(felt(&Tuning::DEFAULT, NEAR_MISS) && !felt(&Tuning::DEFAULT, NEAR_MISS + 0.1));
     }
 }

@@ -43,7 +43,7 @@ pub trait Train {
 }
 
 /// How near where it stands aboard a rider getting on has to be to be on, in meters.
-const ON_SPOT: f32 = 0.2;
+pub const ON_SPOT: f32 = 0.2;
 
 /// How near a station an NPC has to be, setting off somewhere, to think of it,
 /// and how likely it is to then, one in so many; how many can be taking each train at once; and how
@@ -65,6 +65,31 @@ pub const CLEAR_OF_DOORS: f32 = 3.0;
 pub const BOARDING_PACE: f32 = 1.0;
 pub const TIME_TO_SPARE: f32 = 1.0;
 
+tuning!(
+    /// How an NPC takes a train (see the module's constants, its defaults).
+    {
+        /// How near a station one setting off thinks of a train, in meters; how likely it then is
+        /// to take it, one in so many; how many take each train at once; and how long one waits on
+        /// the platform at most, in seconds.
+        train_reach: f32 = TRAIN_REACH,
+        train_chance: usize = TRAIN_CHANCE,
+        riders: usize = RIDERS,
+        train_wait: f32 = TRAIN_WAIT,
+        /// How far out on the platform it waits, how far in it stands aboard, how near where it
+        /// waits is there, how near where it stands aboard is on, and how far out from the train
+        /// is clear of its doorway, in meters.
+        platform_out: f32 = PLATFORM_OUT,
+        stand_in: f32 = STAND_IN,
+        at_platform: f32 = AT_PLATFORM,
+        on_spot: f32 = ON_SPOT,
+        clear_of_doors: f32 = CLEAR_OF_DOORS,
+        /// How fast it gets on and off, in meters per second, and how long the doors have to stay
+        /// open on top of that, in seconds.
+        boarding_pace: f32 = BOARDING_PACE,
+        time_to_spare: f32 = TIME_TO_SPARE,
+    }
+);
+
 /// A droid's ride on a train: from one station to another.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ride {
@@ -83,6 +108,8 @@ pub struct Ride {
     pub stage: Riding,
     /// How long it has been waiting on the platform, in seconds.
     pub waited: f32,
+    /// How it goes about it.
+    pub tuning: Tuning,
 }
 
 /// Where along the way a droid taking the train is.
@@ -120,16 +147,17 @@ impl Ride {
     /// Moves the ride on for a droid at `feet` with `route` ahead of it - on its way to the
     /// platform - the train as `train` has it, after `dt`.
     pub fn step(&mut self, feet: Vector3<f32>, route: &[Vector3<f32>], train: &impl Train, dt: f32) -> Rides {
+        let tuning = self.tuning;
         let doorway = train.at() + train.doorways()[self.doorway];
         let spot = train.at() + self.spot;
         let within = train.within(feet);
         // Whether the doors are open at `station`, and stay open long enough for it to get to `to`.
         let in_time = |station: usize, to: Vector3<f32>| {
-            let takes = flat(to - feet).norm() / BOARDING_PACE + TIME_TO_SPARE;
+            let takes = flat(to - feet).norm() / tuning.boarding_pace + tuning.time_to_spare;
             train.open().is_some_and(|(at, left)| at == station && left > takes)
         };
         let shut = train.open().is_none();
-        let waiting = flat(self.wait - feet).norm() < AT_PLATFORM;
+        let waiting = flat(self.wait - feet).norm() < tuning.at_platform;
         // Kept aboard, the doors shut: it stands where it is till they open again.
         let stay = |ride: &mut Self| {
             ride.spot = Vector3::new(feet.x - train.at().x, train.doorways()[ride.doorway].y, feet.z - train.at().z);
@@ -145,7 +173,7 @@ impl Ride {
             Riding::ToPlatform => Rides::Own,
             Riding::Waiting => {
                 self.waited += dt;
-                if self.waited > TRAIN_WAIT {
+                if self.waited > tuning.train_wait {
                     Rides::Off
                 } else if in_time(self.from, spot) {
                     self.stage = Riding::Boarding;
@@ -154,7 +182,7 @@ impl Ride {
                     Rides::Go(if waiting { Vec::new() } else { vec![self.wait] })
                 }
             }
-            Riding::Boarding if within && flat(spot - feet).norm() < ON_SPOT => {
+            Riding::Boarding if within && flat(spot - feet).norm() < tuning.on_spot => {
                 self.stage = Riding::Aboard;
                 Rides::Go(Vec::new())
             }
@@ -171,7 +199,7 @@ impl Ride {
             }
             Riding::Aboard => Rides::Go(Vec::new()),
             Riding::Leaving
-                if train.out(feet).abs() > CLEAR_OF_DOORS && flat(self.off - feet).norm() < AT_PLATFORM =>
+                if train.out(feet).abs() > tuning.clear_of_doors && flat(self.off - feet).norm() < tuning.at_platform =>
             {
                 Rides::Off
             }
@@ -188,6 +216,7 @@ impl Ride {
 /// another of its stations: the way up to the platform beside the doorway - looked for no further
 /// than `reach` meters - and the ride.
 pub fn take_train<T: Train>(
+    tuning: &Tuning,
     mesh: &NavMesh,
     feet: Vector3<f32>,
     trains: &[T],
@@ -198,7 +227,7 @@ pub fn take_train<T: Train>(
     let away = |train: &T, n: usize| flat(train.station(n) - feet).norm();
     let room = |k: usize| {
         let riding = taken.iter().filter(|&&(t, _)| t == k).count();
-        riding < RIDERS && (0..trains[k].doorways().len()).any(|n| !taken.contains(&(k, n))) && trains[k].stations() >= 2
+        riding < tuning.riders && (0..trains[k].doorways().len()).any(|n| !taken.contains(&(k, n))) && trains[k].stations() >= 2
     };
     // Each train's station nearest it, nearest first; the first of those with room.
     let mut near: Vec<(usize, usize, f32)> = (0..trains.len())
@@ -207,7 +236,7 @@ pub fn take_train<T: Train>(
             let n = (0..train.stations()).min_by(|&a, &b| away(train, a).total_cmp(&away(train, b)))?;
             Some((k, n, away(train, n)))
         })
-        .filter(|&(_, _, d)| d <= TRAIN_REACH)
+        .filter(|&(_, _, d)| d <= tuning.train_reach)
         .collect();
     near.sort_by(|a, b| a.2.total_cmp(&b.2));
     let (which, from, _) = near.into_iter().find(|&(k, _, _)| room(k))?;
@@ -215,15 +244,15 @@ pub fn take_train<T: Train>(
     let free: Vec<usize> = (0..train.doorways().len()).filter(|&n| !taken.contains(&(which, n))).collect();
     let to = (from + 1 + rng.below(train.stations() - 1)) % train.stations();
     let doorway = free[rng.below(free.len())];
-    let wait = trip::floor_near(mesh, train.platform(from, doorway, PLATFORM_OUT))?;
-    let off = trip::floor_near(mesh, train.platform(to, doorway, PLATFORM_OUT))?;
+    let wait = trip::floor_near(mesh, train.platform(from, doorway, tuning.platform_out))?;
+    let off = trip::floor_near(mesh, train.platform(to, doorway, tuning.platform_out))?;
     let route = route_to(mesh, feet, wait, reach);
     if route.is_empty() {
         return None;
     }
     let inward = -train.doorways()[doorway].dot(&train.across()).signum();
-    let spot = train.doorways()[doorway] + train.across() * inward * STAND_IN + train.along() * between(rng, (-0.5, 0.5));
-    Some((route, Ride { train: which, from, to, doorway, spot, wait, off, stage: Riding::ToPlatform, waited: 0.0 }))
+    let spot = train.doorways()[doorway] + train.across() * inward * tuning.stand_in + train.along() * between(rng, (-0.5, 0.5));
+    Some((route, Ride { train: which, from, to, doorway, spot, wait, off, stage: Riding::ToPlatform, waited: 0.0, tuning: *tuning }))
 }
 
 #[cfg(test)]
@@ -298,7 +327,7 @@ mod tests {
         let to = train.stations() - 1;
         let (wait, off) = (train.platform(0, 0, PLATFORM_OUT), train.platform(to, 0, PLATFORM_OUT));
         let spot = train.doorways[0] + Vector3::new(-STAND_IN, 0.0, 0.0);
-        (train, Ride { train: 0, from: 0, to, doorway: 0, spot, wait, off, stage: Riding::Waiting, waited: 0.0 })
+        (train, Ride { train: 0, from: 0, to, doorway: 0, spot, wait, off, stage: Riding::Waiting, waited: 0.0, tuning: Tuning::DEFAULT })
     }
 
     /// Moves the ride on a step of `dt`, the droid walking where it says as it would: on to each
