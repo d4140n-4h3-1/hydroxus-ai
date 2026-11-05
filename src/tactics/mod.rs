@@ -14,9 +14,12 @@
 //! - [`team`]: fighting as a team: shared sightings, targets, cover, flanking, covering fire.
 //! - [`patrol`]: a flying sentry's patrol, search and Alert, and its flight along its route.
 //! - [`utility`]: utility scoring - weighing what an NPC could do against what it takes in.
+//! - [`conduct`]: what an NPC on foot does next, by utility, by its role: chasing, searching,
+//!   telling a sentry, sheltering, mourning, keeping away, following, going about its business.
 
 pub mod blind;
 pub mod chase;
+pub mod conduct;
 pub mod cover;
 pub mod fire;
 pub mod investigate;
