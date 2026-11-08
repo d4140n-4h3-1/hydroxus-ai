@@ -1,7 +1,7 @@
 //! AI for Hydroxus games: NPCs that get about a level, see what is in front of them, hear what
 //! carries to them, and hunt the player through Metal Gear's alert phases.
 //!
-//! It is in four parts, and its alert phases:
+//! It is in five parts, and its alert phases:
 //!
 //! - [`perception`]: what an NPC takes in - what it sees ([`perception::sight`]), hears
 //!   ([`perception::hearing`]), how it becomes aware of someone ([`perception::detection`]), the
@@ -26,6 +26,9 @@
 //!   [`social::faction`]), what becomes of their own ([`social::ties`]), the trouble they keep
 //!   away from ([`social::trouble`]), how they take the player passing ([`social::passing`]), and
 //!   a city's crowd ([`social::crowd`]).
+//! - [`think`]: learning and adapting - what has worked for an NPC and what has not
+//!   ([`think::lesson`]), what the player tends to do ([`think::habit`]), and where they keep
+//!   turning up ([`think::haunt`]); fading with time, told on, and weighing what the rest does.
 //! - [`alert`]: Metal Gear's phases - Alert, Evasion, Caution - and how one leads to the next,
 //!   which what an NPC perceives and what it does both turn on.
 //!
@@ -71,6 +74,7 @@ pub mod navigation;
 pub mod perception;
 pub mod social;
 pub mod tactics;
+pub mod think;
 
 pub use nalgebra;
 
@@ -192,6 +196,12 @@ pub struct Tuning {
     pub ties: crate::social::ties::Tuning,
     /// The player passing by.
     pub passing: crate::social::passing::Tuning,
+    /// Learning what works.
+    pub lesson: crate::think::lesson::Tuning,
+    /// Learning the player's habits.
+    pub habit: crate::think::habit::Tuning,
+    /// Learning where the player turns up.
+    pub haunt: crate::think::haunt::Tuning,
 }
 
 impl Tuning {
@@ -233,6 +243,9 @@ impl Tuning {
         trouble: crate::social::trouble::Tuning::DEFAULT,
         ties: crate::social::ties::Tuning::DEFAULT,
         passing: crate::social::passing::Tuning::DEFAULT,
+        lesson: crate::think::lesson::Tuning::DEFAULT,
+        habit: crate::think::habit::Tuning::DEFAULT,
+        haunt: crate::think::haunt::Tuning::DEFAULT,
     };
 }
 
@@ -260,6 +273,7 @@ pub mod prelude {
             sight::{Fog, Seeing, Sight, Stance},
         },
         tactics::{search::SearchMap, threat::Threat},
+        think::{habit::Habits, haunt::Haunts, lesson::Lessons},
     };
 }
 

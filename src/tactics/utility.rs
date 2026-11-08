@@ -120,7 +120,7 @@ pub struct Reasoner<A, I> {
     /// How much more the action it is doing already counts, as a share of its score: 0.1, a
     /// tenth more.
     pub inertia: f32,
-    /// What each action scored the last time it chose, its inertia left out, in the order of
+    /// What each action scored the last time it chose - any bias in, its inertia left out - in the order of
     /// `actions`: for a game to show why it did what it did.
     #[cfg_attr(feature = "serde", serde(skip, default = "Vec::new"))]
     pub scores: Vec<(A, f32)>,
@@ -135,8 +135,15 @@ impl<A: Copy + PartialEq, I: Copy> Reasoner<A, I> {
     /// The best of its actions in `situation`, doing `current` already - none if it has none, or
     /// none scores anything. The first listed wins a tie.
     pub fn choose(&mut self, situation: &impl Situation<I>, current: Option<A>) -> Option<A> {
+        self.choose_by(situation, current, |_| 1.0)
+    }
+
+    /// As [`Reasoner::choose`], each action's score times `bias` of it as well - what the NPC has
+    /// learned of it, say (see [`crate::think::lesson`]). A bias can weigh an action up or down,
+    /// but never opens one its considerations shut. What it scored, kept in `scores`, has it in.
+    pub fn choose_by(&mut self, situation: &impl Situation<I>, current: Option<A>, bias: impl Fn(A) -> f32) -> Option<A> {
         self.scores.clear();
-        self.scores.extend(self.actions.iter().map(|a| (a.action, a.score(situation))));
+        self.scores.extend(self.actions.iter().map(|a| (a.action, a.score(situation) * bias(a.action).max(0.0))));
         let mut best: Option<(A, f32)> = None;
         for &(action, score) in &self.scores {
             let score = if Some(action) == current { score * (1.0 + self.inertia) } else { score };

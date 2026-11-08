@@ -9,7 +9,7 @@ It knows nothing of the engine but its vectors (nalgebra's, which the engine re-
 casts the rays that say whether anything is in the way, moves the nodes and plays the animations;
 this decides what an NPC makes of what is round it.
 
-It is in four folders, and its alert phases besides.
+It is in five folders, and its alert phases besides.
 
 ### `perception` - what an NPC takes in
 
@@ -66,6 +66,14 @@ It is in four folders, and its alert phases besides.
 | `rumour` | What each NPC knows of the player (`Minds`): deeds seen at full strength, told on weaker each time and minded less, fading and forgotten; one turning up afresh has heard what the town talks of. |
 | `chat` | What NPCs talk about among themselves: news one has for another, told on as they talk; or, feeling strongly, what one thinks of the player, swaying the rest; or nothing much. |
 | `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight, on the navmesh's pavement. |
+
+### `think` - learning and adapting
+
+| Module | What it does |
+|--------|--------------|
+| `lesson` | What has worked: each thing an NPC could do weighed up or down by how it turned out the times it did it - a run of outcomes moving it, one fluke not - weighing a utility reasoner's choice, never opening what its considerations shut nor barring what failed; fading back over minutes, and told on to others at half strength, so a squad comes to think alike. |
+| `habit` | The player's habits: how often, lately, they do each of the things a game tells apart - the way they come in, the trick they use - and how much an NPC expects each next, for how much it has seen; fading, so a player who changes their ways is met afresh, and told on. |
+| `haunt` | Where the player keeps turning up: where they were seen and found hiding, by navmesh cell, fading and told on; a search map leaned on them looks there first - only where they could have got to since - and a patrol can go by the likeliest. |
 
 ### Besides
 

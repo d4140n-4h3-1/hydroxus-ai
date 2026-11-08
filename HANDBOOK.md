@@ -15,6 +15,7 @@ It was built for Ruptura Systematis: stealth droids that hunt the player through
 | `tactics` | What it does about it: chase, search, investigate, shoot, take cover, fight as a team, patrol, and which of these to do | `utility`, `conduct`, `search`, `investigate`, `chase`, `pace`, `threat`, `fire`, `blind`, `cover`, `team`, `patrol` |
 | `navigation` | How it gets about: the navmesh, routes, walking, ferries, trains, wandering a city, making way, driving, flying | `navmesh`, `walk`, `trip`, `ride`, `wander`, `steer`, `drive`, `traffic`, `flight` |
 | `social` | NPCs among each other: groups, talk, reports, opinions, rumours, factions, ties, trouble, passing the player, the crowd | `group`, `talk`, `report`, `opinion`, `rumour`, `faction`, `chat`, `ties`, `trouble`, `passing`, `crowd` |
+| `think` | What it learns and how it adapts: what has worked for it, the player's habits, where the player hides | `lesson`, `habit`, `haunt` |
 
 ## Getting started
 
@@ -71,10 +72,11 @@ The game measures and moves; everything between, for each NPC each frame, is the
 - **Results are events, not lines.** The crate says what happened (`Change::Spotted`, `Uneasy::Noticed`, `patrol::Event`). The game picks the words, sounds and UI, so the crate never decides what a character says.
 - **Every number is tuning.** Each module declares its constants once and gathers them with the `tuning!` macro into a `Tuning` struct with a `DEFAULT` const. Nothing reads a bare constant at runtime, so a game can override any of them, or load them from a file.
 - **Choices are scored, not hard-coded.** `tactics::utility` turns inputs into scores through response curves; `tactics::conduct` uses it for every NPC on foot, and `tactics::patrol` for drones (see Tactics).
+- **What is learned weighs; it never decides.** `think` keeps lessons, habits and haunts that fade with time, and leans the existing choices on them: a reasoner's scores, a search map's chances, a game's own inputs.
 - **Hot paths are not generic.** Generic functions compile in the calling crate, and a game's own code is often unoptimised in development; the navmesh's routing ran ten times slower that way. Hot paths take `&dyn Fn` and are compiled, optimised, inside the crate.
 - **Headings and units.** Directions along the ground are headings in radians, positive to the left of the world's +z. Distances are meters, times seconds.
 
-Modules are tested on their own with plain data: 132 tests in `cargo test`, and `examples/ai_bench.rs` and `examples/navmesh_bench.rs` time the per-frame costs.
+Modules are tested on their own with plain data: 147 tests in `cargo test`, and `examples/ai_bench.rs` and `examples/navmesh_bench.rs` time the per-frame costs.
 
 ## Alert phases and wariness
 
@@ -225,6 +227,22 @@ NPCs hold opinions of the player, pass news on to each other, belong to factions
 | `passing` | The player passing within 5 m: friendly NPCs greet or tip them off, neutral ones sometimes nod (30%), wary ones keep away, hostile ones glare; each at most every 2 minutes, and only one NPC every 6 s |
 | `crowd` | A city's crowd: only so many NPCs, those far off and out of sight turning up again nearer the player |
 
+## Learning and adapting (`think`)
+
+What an NPC learns, kept by the game per NPC, per squad or per faction, and weighing what the rest of the crate already does. Everything learned fades with time, so a player who changes their ways is met afresh; can be told to another at half strength (`tell`), so a squad comes to think alike; and, with `serde`, saved between sessions.
+
+**What has worked** (`think::lesson`). `Lessons<A>` keeps what an NPC makes of each action, from −1 (never works) to 1 (always does). The game says how each turned out with `learn(tuning, action, outcome)`: a search that found the player, 1; a chase they escaped, −1. Each outcome moves it a quarter of the way (`rate`), so a run of them counts and one fluke does not. `Lessons::choose` runs a `Reasoner` with each score times `1 + sway × worth` (0.5 to 1.5 by default), through `Reasoner::choose_by`. A bias only weighs what is open: what the considerations shut stays shut, and what never worked is less likely, never barred. It fades halfway in 10 minutes.
+
+```rust
+let conduct = lessons.choose(&tuning.lesson, reasoners.of(role), &reading, current).unwrap_or(Conduct::GoAbout);
+// …later, when it is known how it went:
+lessons.learn(&tuning.lesson, Conduct::Search, if found { 1.0 } else { -0.5 });
+```
+
+**The player's habits** (`think::habit`). `Habits<T>` counts what the player does, by the game's own enum (the way they come in, how they deal with a guard): `saw(what)` each time. `share(what)` is how much of what they do it is, `sureness()` how far to go by it (a half after 4 sightings), and `expect(what)`, both in one from 0 to 1, is made to be a utility input: a guard that has seen the player come over the roofs again and again watches the roofs. It fades halfway in 15 minutes.
+
+**Where the player turns up** (`think::haunt`). `Haunts` keeps where the player was seen (`seen_at`) and found hiding (`found_at`, counting 3×), by navmesh cell, so haunts survive doors opening and shutting. Report the moments that matter, such as spotted, lost or found, not every frame. Once the player is lost, `haunts.lean(tuning, mesh, &mut map)` after `SearchMap::lose` weighs each polygon by the haunts within 4 m of it, up to twice as likely. It only reweighs where they could be, never adds chance where they could not have got to. `likeliest(mesh)` gives a patrol somewhere to go by. At most 64 haunts are kept, and each fades halfway in 30 minutes.
+
 ## Integrating with a game
 
 Ruptura Systematis is the reference integration: `src/inhabitants.rs` holds every droid's AI state and steps it, and `src/game.rs` turns what comes back into lines, sounds and notes.
@@ -234,7 +252,7 @@ Ruptura Systematis is the reference integration: `src/inhabitants.rs` holds ever
 - **Data drives the kinds.** Each kind of droid is a character in the game's JSON: its lines, its faction, its role, how many walk in pairs or groups, its turf, and what share wear a radio. The crate only sees numbers and enums.
 - **Events become content.** A `Change::Spotted` becomes the "spotted" bark and red eyes; a radio call that goes through calls `radio_call` on every sentry within 300 m; a `Grief::Avenge` turns a gang member hostile.
 
-**Testing.** Each module is tested with plain data (`cargo test`, 132 tests); game-side behaviour is tried on small maps. In Ruptura Systematis, the Test section's Demo Town is peopled as Urbs is and loads in about a second. `MAZE_KNOCKDOWN=<seconds>` shoots the droid nearest the player to start witnesses, chases and radio calls, and `MAZE_DEBUG=1` logs what the AI did. `cargo run --release --example ai_bench` times a city's traffic, 50 drones and 2,000 flight routes: on the order of 0.05 ms, 0.003 ms and 2 ms.
+**Testing.** Each module is tested with plain data (`cargo test`, 147 tests); game-side behaviour is tried on small maps. In Ruptura Systematis, the Test section's Demo Town is peopled as Urbs is and loads in about a second. `MAZE_KNOCKDOWN=<seconds>` shoots the droid nearest the player to start witnesses, chases and radio calls, and `MAZE_DEBUG=1` logs what the AI did. `cargo run --release --example ai_bench` times a city's traffic, 50 drones and 2,000 flight routes: on the order of 0.05 ms, 0.003 ms and 2 ms.
 
 **Developing against a local checkout.** Add a temporary path patch to the game's `.cargo/config.toml`:
 
@@ -264,6 +282,9 @@ The types a game touches most, and what to call on them each frame.
 | `NavMesh` | `navigation::navmesh` | `build`, `set_walkable`, `sync`, `route` | a route of points, last first |
 | `Minds` | `social::rumour` | `saw_done`, `tell`, `came_across`, `step(dt)` | regard, rumours, faction changes |
 | `Mourning` | `social::ties` | `step(tuning, feet, dt)` | `Doing`: GoTo, Kneel, Done |
+| `Lessons<A>` | `think::lesson` | `choose(…)`, `learn(action, outcome)`, `tell`, `step(dt)` | the action to do, weighed by what worked |
+| `Habits<T>` | `think::habit` | `saw(what)`, `expect(what)`, `likeliest()`, `step(dt)` | how much the player is expected to do it |
+| `Haunts` | `think::haunt` | `seen_at`, `found_at`, `lean(…, &mut map)`, `likeliest`, `step(dt)` | a search leaned on where they hide |
 | `Passing` | `social::passing` | `gesture(…)`, `ready`, `did`, `step` | Greet, Tip, Nod, Avoid or Glare |
 
 Every default number named in this handbook is that module's `Tuning::DEFAULT`; change it in your own `Tuning` rather than in the crate.

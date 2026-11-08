@@ -233,6 +233,22 @@ impl SearchMap {
         best.map(|(_, at)| at)
     }
 
+    /// Weighs where they could be by `by`, as well, from nothing up - by where they have been
+    /// before, say (see [`crate::think::haunt`]) - and makes it up to the whole again. Only where
+    /// they could be is weighed: it never puts them anywhere they could not have got to. Weighed
+    /// to nothing everywhere, it is left as it was.
+    pub fn lean(&mut self, by: impl Fn(Poly) -> f32) {
+        let total = self.total();
+        let leaned: Vec<(Poly, f32)> = self.chance.iter().map(|(&n, &chance)| (n, chance * by(n).max(0.0))).collect();
+        let after: f32 = leaned.iter().map(|(_, chance)| chance).sum();
+        if total <= 1.0e-6 || after <= 1.0e-6 || !after.is_finite() {
+            return;
+        }
+        for (n, chance) in leaned {
+            self.chance.insert(n, chance * total / after);
+        }
+    }
+
     fn total(&self) -> f32 {
         self.chance.values().sum()
     }
