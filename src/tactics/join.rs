@@ -5,20 +5,21 @@
 
 use crate::{
     alert::Alert,
-    perception::sight::{Sight, Stance},
+    perception::sight::{Seeing, Sight, Stance},
 };
 use nalgebra::Vector3;
 
 /// Whether an NPC at `feet`, facing `heading`, in `alert` - or calm, with none - could see
-/// another at `other`, if nothing were in the way: as it would see the player standing there.
+/// another at `other`, by what there is to see by (`seeing`: in the dark or not, and fog), if
+/// nothing were in the way: as it would see the player standing there.
 pub fn could_see_other(
     alert: Option<Alert>,
     feet: Vector3<f32>,
     heading: f32,
     other: Vector3<f32>,
-    in_the_dark: bool,
+    seeing: impl Into<Seeing>,
 ) -> bool {
-    Sight::default().could_see(alert, feet, heading, other, Stance::Standing, in_the_dark)
+    Sight::default().could_see(alert, feet, heading, other, Stance::Standing, seeing)
 }
 
 /// What deciding who joins a chase takes from an NPC.
@@ -38,13 +39,14 @@ pub struct Watch {
 
 /// Which of `watches` join a chase: each sentry, not busy nor after the player already, that
 /// could see a sentry after them - done standing, having just turned hostile - by
-/// [`could_see_other`], `in_the_dark` or not, where `clear` says nothing is in the way from the
-/// one, as an index, to the other.
+/// [`could_see_other`], by what there is to see by (`seeing`), where `clear` says nothing is in
+/// the way from the one, as an index, to the other.
 pub fn joiners(
     watches: &[Watch],
-    in_the_dark: bool,
+    seeing: impl Into<Seeing>,
     clear: impl Fn(usize, usize) -> bool,
 ) -> Vec<usize> {
+    let seeing = seeing.into();
     let after_player =
         |watch: &Watch| watch.alert == Some(Alert::Alert) && watch.sees_player && !watch.busy;
     let chasing: Vec<usize> = (0..watches.len())
@@ -58,7 +60,7 @@ pub fn joiners(
                 && !after_player(watch)
                 && chasing.iter().any(|&n| {
                     n != m
-                        && could_see_other(watch.alert, watch.feet, watch.heading, watches[n].feet, in_the_dark)
+                        && could_see_other(watch.alert, watch.feet, watch.heading, watches[n].feet, seeing)
                         && clear(m, n)
                 })
         })

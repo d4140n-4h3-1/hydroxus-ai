@@ -257,7 +257,7 @@ pub mod prelude {
         },
         perception::{
             hearing::Heard,
-            sight::{Sight, Stance},
+            sight::{Fog, Seeing, Sight, Stance},
         },
         tactics::{search::SearchMap, threat::Threat},
     };
