@@ -12,6 +12,9 @@
 //!   through them - spotted, chased, lost, searched for. Only `Squad::step` is timed: the senses
 //!   (a sight-line along the floor and `Sight::visibility`) and moving the bodies straight to
 //!   where they are going are the game's, done outside the timer.
+//! - **memory**: one NPC's memory full - 32 records of each of its 7 kinds, 224 in all, spread over
+//!   200 m - recalled by cue (dangers within 30 m of a spot, best 8) 100,000 times, by kind, and
+//!   consolidated.
 use hydroxus_ai::{
     navigation::{
         flight,
@@ -36,6 +39,39 @@ fn main() {
     patrols();
     flights();
     orchestrated();
+    memory();
+}
+
+fn memory() {
+    use hydroxus_ai::think::memory::{Cue, Kind, Memory, Record};
+    let ai = Tuning::DEFAULT;
+    let mut rng = Rng::new(11);
+    let mut full = Memory::<u8>::new();
+    for kind in Kind::ALL {
+        for n in 0..32u8 {
+            let at = Vector3::new(rng.below(200) as f32, 0.0, rng.below(200) as f32);
+            full.note(&ai.memory, Record::new(kind).at(at).what(n % 4).strength(0.5 + rng.below(50) as f32 / 100.0));
+        }
+    }
+    let records = full.len();
+    let spots: Vec<Vector3<f32>> = (0..1000).map(|_| Vector3::new(rng.below(200) as f32, 0.0, rng.below(200) as f32)).collect();
+    let mut i = 0;
+    let (cue_mean, cue_worst) = time(100_000, || {
+        let cue = Cue::of(&[Kind::Danger]).near(spots[i % spots.len()], 30.0);
+        black_box(full.recall_for(black_box(&cue), 8));
+        i += 1;
+    });
+    let (kind_mean, _) = time(100_000, || {
+        black_box(full.recall(black_box(Kind::Encounter)));
+    });
+    let (consolidate_mean, consolidate_worst) = time(100, || {
+        let mut copy = full.clone();
+        black_box(copy.consolidate(&ai.memory));
+    });
+    println!(
+        "memory: {records} records; recalled by cue {:.4} ms (worst {:.3} ms), by kind {:.4} ms; consolidated {:.3} ms (worst {:.3} ms)",
+        cue_mean, cue_worst, kind_mean, consolidate_mean, consolidate_worst
+    );
 }
 
 fn orchestrated() {

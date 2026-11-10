@@ -18,6 +18,23 @@
 //!   [`Record::firsthand`] - and fainter, by the tuning's `told` share.
 //! - What is recalled ([`Memory::recall`], [`Memory::near`], [`Memory::about`]) comes strongest
 //!   first. Nothing is random, and with the `serde` feature it is kept between sessions.
+//!
+//! Retrieval in context, rather than going through everything it remembers:
+//!
+//! - **Importance.** A record can matter more than another ([`Record::importance`], 0 to 1): being
+//!   shot at more than passing someone. The more it matters, the slower it fades - up to the
+//!   tuning's `importance_hold` again as long - and the more it counts when recalled.
+//! - **Relevance.** [`Memory::recall_for`] takes a [`Cue`] - which kinds, near where and how far,
+//!   about whom, of what - and gives back the few records that fit it best, each with how well
+//!   ([`Memory::relevance`]): how strongly it is remembered, times how near the place (1 at it, a
+//!   half at the cue's edge, none past it), whether it is about the one asked after and is the
+//!   thing asked about, and how much it matters.
+//! - **Consolidation.** Many faint records of the same kind of thing, close together - a guard that
+//!   keeps glimpsing someone about one courtyard - become one ([`Memory::consolidate`]): where
+//!   they were on average, by how strong each was; as strong as all of them together; noted as
+//!   many times. Only records under the tuning's `consolidate_below` are merged, within its
+//!   `consolidate_within` meters. A kind that is full consolidates before it forgets anything -
+//!   then whatever their strength, summing up being better than forgetting.
 
 use nalgebra::Vector3;
 
@@ -64,6 +81,12 @@ pub const SAME_WITHIN: f32 = 3.0;
 pub const TOLD: f32 = 0.5;
 /// How far a record's outcome moves to a new one's, each time it is noted again.
 pub const OUTCOME_RATE: f32 = 0.5;
+/// How much longer the most important record lasts, on top of its kind's half-life: three times
+/// again - four times as long.
+pub const IMPORTANCE_HOLD: f32 = 3.0;
+/// How faint a record has to be to be merged with others like it, and how near them, in meters.
+pub const CONSOLIDATE_BELOW: f32 = 0.5;
+pub const CONSOLIDATE_WITHIN: f32 = 8.0;
 
 tuning!(
     /// How long an NPC remembers each kind of thing, and how much (see the module's constants).
@@ -86,6 +109,11 @@ tuning!(
         told: f32 = TOLD,
         /// How far a record's outcome moves to a new one's, each time it is noted again.
         outcome_rate: f32 = OUTCOME_RATE,
+        /// How much longer the most important record lasts, on top of its kind's half-life.
+        importance_hold: f32 = IMPORTANCE_HOLD,
+        /// How faint a record has to be to be merged with others like it, and how near them.
+        consolidate_below: f32 = CONSOLIDATE_BELOW,
+        consolidate_within: f32 = CONSOLIDATE_WITHIN,
     }
 );
 
@@ -126,6 +154,10 @@ pub struct Record<T = ()> {
     pub times: u32,
     /// How long since it was last noted, in seconds.
     pub age: f32,
+    /// How much it matters, from 0 to 1: the more, the slower it fades and the more it counts when
+    /// recalled.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub importance: f32,
     /// How strong it was when last noted: `strength` is worked out afresh from it and `age`
     /// each step, rather than faded a little at a time, so that rounding does not build up over
     /// hours of short frames.
@@ -135,7 +167,7 @@ pub struct Record<T = ()> {
 impl<T> Record<T> {
     /// A record of `kind`, as strong as can be, seen for itself, of nothing in particular yet.
     pub fn new(kind: Kind) -> Self {
-        Self { kind, at: None, who: None, what: None, outcome: None, strength: 1.0, firsthand: true, times: 1, age: 0.0, noted: 1.0 }
+        Self { kind, at: None, who: None, what: None, outcome: None, strength: 1.0, firsthand: true, times: 1, age: 0.0, importance: 0.0, noted: 1.0 }
     }
 
     /// Where it was.
@@ -166,6 +198,51 @@ impl<T> Record<T> {
     /// Told of it, rather than seeing it for itself.
     pub fn secondhand(self) -> Self {
         Self { firsthand: false, ..self }
+    }
+
+    /// Mattering `importance`, from 0 to 1.
+    pub fn importance(self, importance: f32) -> Self {
+        Self { importance, ..self }
+    }
+}
+
+/// What an NPC is trying to remember: of which kinds - any, if none are given - near where and
+/// how near, about whom, of what. Anything left out asks nothing of a record.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cue<'a, T = ()> {
+    pub kinds: &'a [Kind],
+    pub at: Option<Vector3<f32>>,
+    /// How far from `at` a record can be and still be of it, in meters.
+    pub within: f32,
+    pub who: Option<u32>,
+    pub what: Option<T>,
+}
+
+impl<T> Default for Cue<'_, T> {
+    fn default() -> Self {
+        Self { kinds: &[], at: None, within: SAME_WITHIN, who: None, what: None }
+    }
+}
+
+impl<'a, T> Cue<'a, T> {
+    /// Of `kinds`, and nothing else asked.
+    pub fn of(kinds: &'a [Kind]) -> Self {
+        Self { kinds, ..Self::default() }
+    }
+
+    /// Within `within` meters of `at`.
+    pub fn near(self, at: Vector3<f32>, within: f32) -> Self {
+        Self { at: Some(at), within, ..self }
+    }
+
+    /// About `who`.
+    pub fn about(self, who: u32) -> Self {
+        Self { who: Some(who), ..self }
+    }
+
+    /// Of `what`.
+    pub fn what(self, what: T) -> Self {
+        Self { what: Some(what), ..self }
     }
 }
 
@@ -199,6 +276,7 @@ impl<T: Copy + PartialEq> Memory<T> {
         }
         let strength = record.strength.clamp(0.0, 1.0);
         let outcome = record.outcome.map(|o| o.clamp(-1.0, 1.0));
+        let importance = if record.importance.is_finite() { record.importance.clamp(0.0, 1.0) } else { 0.0 };
         if strength < tuning.forgotten {
             return;
         }
@@ -220,6 +298,7 @@ impl<T: Copy + PartialEq> Memory<T> {
                 (was, now) => now.or(was),
             };
             had.firsthand |= record.firsthand;
+            had.importance = had.importance.max(importance);
             had.times = had.times.saturating_add(1);
             had.age = 0.0;
             had.noted = had.strength;
@@ -229,8 +308,12 @@ impl<T: Copy + PartialEq> Memory<T> {
         if most == 0 {
             return;
         }
-        let of_kind = self.records.iter().filter(|r| r.kind == record.kind).count();
-        if of_kind >= most {
+        let full = |records: &[Record<T>]| records.iter().filter(|r| r.kind == record.kind).count() >= most;
+        // Full: what it can sum up, it sums up - however strong, rather than forget anything.
+        if full(&self.records) {
+            self.consolidate_kind(tuning, record.kind, f32::INFINITY);
+        }
+        if full(&self.records) {
             let faintest = self
                 .records
                 .iter()
@@ -246,7 +329,7 @@ impl<T: Copy + PartialEq> Memory<T> {
                 _ => return,
             }
         }
-        self.records.push(Record { strength, outcome, age: 0.0, times: 1, noted: strength, ..record });
+        self.records.push(Record { strength, outcome, importance, age: 0.0, times: 1, noted: strength, ..record });
     }
 
     /// Moves it on `dt` seconds: each record fading by its kind's half-life, forgotten once under
@@ -258,7 +341,8 @@ impl<T: Copy + PartialEq> Memory<T> {
         }
         for record in &mut self.records {
             record.age += dt;
-            record.strength = super::fade(record.noted, tuning.half_life(record.kind), record.age);
+            let half_life = tuning.half_life(record.kind) * (1.0 + tuning.importance_hold.max(0.0) * record.importance);
+            record.strength = super::fade(record.noted, half_life, record.age);
         }
         self.records.retain(|r| r.strength >= tuning.forgotten);
     }
@@ -295,6 +379,113 @@ impl<T: Copy + PartialEq> Memory<T> {
             let strength = record.strength * tuning.told.clamp(0.0, 1.0);
             to.note(tuning, Record { firsthand: false, strength, noted: strength, ..*record });
         }
+    }
+
+    /// How well `record` fits `cue`, from 0 (not at all) up: how strongly it is remembered, times
+    /// how near the place asked about (1 at it, a half at the cue's `within`, nothing past it; a
+    /// half for a record of nowhere in particular), whether it is about the one asked after (a half
+    /// if about no one in particular, nothing if about another), whether it is what was asked
+    /// about (the same), and how much it matters (from a half, mattering nothing, to 1).
+    pub fn relevance(&self, cue: &Cue<'_, T>, record: &Record<T>) -> f32 {
+        if !cue.kinds.is_empty() && !cue.kinds.contains(&record.kind) {
+            return 0.0;
+        }
+        let place = match (cue.at, record.at) {
+            (Some(a), Some(b)) => {
+                let d = (a - b).norm();
+                let within = if cue.within.is_finite() { cue.within.max(1.0e-3) } else { f32::MAX };
+                if d > within {
+                    return 0.0;
+                }
+                1.0 - 0.5 * d / within
+            }
+            (Some(_), None) => 0.5,
+            _ => 1.0,
+        };
+        let who = match (cue.who, record.who) {
+            (Some(a), Some(b)) if a != b => return 0.0,
+            (Some(_), None) => 0.5,
+            _ => 1.0,
+        };
+        let what = match (cue.what, record.what) {
+            (Some(a), Some(b)) if a != b => return 0.0,
+            (Some(_), None) => 0.5,
+            _ => 1.0,
+        };
+        record.strength * place * who * what * (0.5 + 0.5 * record.importance)
+    }
+
+    /// The `most` records that fit `cue` best, best first, each with how well (see
+    /// [`Memory::relevance`]) - none that does not fit at all.
+    pub fn recall_for(&self, cue: &Cue<'_, T>, most: usize) -> Vec<(f32, &Record<T>)> {
+        let mut found: Vec<(f32, &Record<T>)> = self.records.iter().map(|r| (self.relevance(cue, r), r)).filter(|&(score, _)| score > 0.0).collect();
+        if found.len() > most {
+            found.select_nth_unstable_by(most, |a, b| b.0.total_cmp(&a.0));
+            found.truncate(most);
+        }
+        found.sort_by(|a, b| b.0.total_cmp(&a.0));
+        found
+    }
+
+    /// Sums up faint records of the same thing close together, of every kind (see the module):
+    /// how many records fewer it has for it.
+    pub fn consolidate(&mut self, tuning: &Tuning) -> usize {
+        let before = self.records.len();
+        for kind in Kind::ALL {
+            self.consolidate_kind(tuning, kind, tuning.consolidate_below);
+        }
+        before - self.records.len()
+    }
+
+    /// Sums up the records of `kind` fainter than `below` (see [`Memory::consolidate`]).
+    fn consolidate_kind(&mut self, tuning: &Tuning, kind: Kind, below: f32) {
+        let faint = |r: &Record<T>| r.kind == kind && r.at.is_some() && r.strength < below;
+        // Strongest first: each gathers in the faint ones round it not gathered already.
+        let mut order: Vec<usize> = (0..self.records.len()).filter(|&n| faint(&self.records[n])).collect();
+        order.sort_by(|&a, &b| self.records[b].strength.total_cmp(&self.records[a].strength));
+        let mut gone = vec![false; self.records.len()];
+        for (i, &n) in order.iter().enumerate() {
+            if gone[n] {
+                continue;
+            }
+            let centre = self.records[n].at.expect("faint records have a place");
+            let group: Vec<usize> = std::iter::once(n)
+                .chain(order[i + 1..].iter().copied().filter(|&m| {
+                    let (a, b) = (&self.records[n], &self.records[m]);
+                    !gone[m] && a.who == b.who && a.what == b.what && b.at.is_some_and(|at| (at - centre).norm() <= tuning.consolidate_within)
+                }))
+                .collect();
+            if group.len() < 2 {
+                continue;
+            }
+            let weight: f32 = group.iter().map(|&m| self.records[m].strength).sum::<f32>().max(1.0e-6);
+            let at = group.iter().map(|&m| self.records[m].at.expect("placed") * self.records[m].strength).sum::<Vector3<f32>>() / weight;
+            let strength = 1.0 - group.iter().map(|&m| 1.0 - self.records[m].strength).product::<f32>();
+            let outcomes: Vec<(f32, f32)> = group.iter().filter_map(|&m| self.records[m].outcome.map(|o| (o, self.records[m].strength))).collect();
+            let outcome = (!outcomes.is_empty()).then(|| {
+                outcomes.iter().map(|(o, w)| o * w).sum::<f32>() / outcomes.iter().map(|(_, w)| w).sum::<f32>().max(1.0e-6)
+            });
+            let merged = Record {
+                at: Some(at),
+                strength,
+                noted: strength,
+                outcome,
+                firsthand: group.iter().any(|&m| self.records[m].firsthand),
+                importance: group.iter().map(|&m| self.records[m].importance).fold(0.0, f32::max),
+                times: group.iter().map(|&m| self.records[m].times).fold(0u32, |a, t| a.saturating_add(t)),
+                age: 0.0,
+                ..self.records[n]
+            };
+            for &m in &group[1..] {
+                gone[m] = true;
+            }
+            self.records[n] = merged;
+        }
+        let mut n = 0;
+        self.records.retain(|_| {
+            n += 1;
+            !gone[n - 1]
+        });
     }
 
     /// How many records it has.
@@ -471,6 +662,89 @@ mod tests {
         assert_eq!(memory, before);
         memory.note(&Tuning { most: 0, ..T }, Record::new(Kind::Group).who(1));
         assert_eq!(memory, before, "keeping none, it keeps none");
+    }
+
+    #[test]
+    fn what_matters_more_is_remembered_longer() {
+        let mut memory = Memory::<()>::new();
+        memory.note(&T, Record::new(Kind::Danger).at(at(0.0)));
+        memory.note(&T, Record::new(Kind::Danger).at(at(50.0)).importance(1.0));
+        memory.step(&T, DANGER_HALF_LIFE);
+        let near = |x: f32| memory.near(Kind::Danger, at(x), 1.0)[0].strength;
+        assert!((near(0.0) - 0.5).abs() < 1.0e-4);
+        assert!((near(50.0) - 0.5f32.powf(1.0 / (1.0 + IMPORTANCE_HOLD))).abs() < 1.0e-4, "four times as long: {}", near(50.0));
+    }
+
+    #[test]
+    fn what_fits_the_cue_comes_first_not_merely_what_is_strongest() {
+        let mut memory = Memory::<Saw>::new();
+        memory.note(&T, Record::new(Kind::Danger).at(at(100.0)).strength(1.0));
+        memory.note(&T, Record::new(Kind::Danger).at(at(2.0)).strength(0.6));
+        memory.note(&T, Record::new(Kind::Danger).at(at(9.0)).strength(0.9));
+        memory.note(&T, Record::new(Kind::Event).at(at(1.0)).what(Saw::Shooting));
+        memory.note(&T, Record::new(Kind::Event).at(at(1.5)).what(Saw::Robbery).who(3));
+        // Dangers about here: the near one before the stronger one further off; the far one not at all.
+        let dangers = Cue::of(&[Kind::Danger]).near(at(0.0), 10.0);
+        let found: Vec<f32> = memory.recall_for(&dangers, 5).iter().map(|(_, r)| r.at.unwrap().x).collect();
+        assert_eq!(found, vec![2.0, 9.0]);
+        // A shooting seen about here: the shooting, not the robbery.
+        let shooting = Cue::of(&[Kind::Event]).near(at(0.0), 10.0).what(Saw::Shooting);
+        let found = memory.recall_for(&shooting, 5);
+        assert_eq!(found.iter().map(|(_, r)| r.what).collect::<Vec<_>>(), vec![Some(Saw::Shooting)]);
+        // Anything about a shooting here: a danger nearby, of nothing in particular, counts half.
+        let any = Cue::default().near(at(0.0), 10.0).what(Saw::Shooting);
+        let found = memory.recall_for(&any, 5);
+        assert_eq!(found[0].1.what, Some(Saw::Shooting));
+        assert!(found[1..].iter().all(|(score, r)| r.kind == Kind::Danger && *score <= 0.5 * found[0].0 + 1.0e-6), "{found:?}");
+        // About one in particular, only theirs.
+        let theirs = Cue::of(&[Kind::Event]).about(3);
+        let found = memory.recall_for(&theirs, 5);
+        assert_eq!(found.len(), 2, "theirs, and one about no one in particular, at half");
+        assert_eq!(found[0].1.who, Some(3));
+        assert!(found[1].0 < found[0].0);
+        // Asked for one, it gives the best one.
+        assert_eq!(memory.recall_for(&Cue::default(), 1).len(), 1);
+        assert!(memory.recall_for(&Cue::of(&[Kind::Group]), 5).is_empty());
+    }
+
+    #[test]
+    fn many_faint_glimpses_about_one_place_become_one_memory_of_it() {
+        // Six faint glimpses round a courtyard, each 3.5 m from the middle: too far apart to be
+        // the same glimpse (`same_within`), near enough to be the same place (`consolidate_within`).
+        let mut memory = Memory::<()>::new();
+        for n in 0..6 {
+            let angle = n as f32 * std::f32::consts::TAU / 6.0;
+            memory.note(&T, Record::new(Kind::Encounter).at(Vector3::new(3.5 * angle.cos(), 0.0, 3.5 * angle.sin())).strength(0.3));
+        }
+        memory.note(&T, Record::new(Kind::Encounter).at(at(40.0)).strength(0.3));
+        memory.note(&T, Record::new(Kind::Encounter).at(at(2.0)).who(9).strength(0.3));
+        memory.note(&T, Record::new(Kind::Encounter).at(at(0.0)).strength(0.9));
+        let before = memory.len();
+        let fewer = memory.consolidate(&T);
+        assert_eq!((before, fewer), (9, 5));
+        let merged = memory.recall(Kind::Encounter).into_iter().find(|r| r.times == 6).expect("one of six");
+        assert!(merged.strength > 0.85, "as strong as all of them together: {}", merged.strength);
+        assert!(merged.at.unwrap().norm() < 1.0e-4, "where they were on average: {:?}", merged.at);
+        // Far off, about someone else, or strong already: left as they were.
+        assert_eq!(memory.near(Kind::Encounter, at(40.0), 1.0).len(), 1);
+        assert_eq!(memory.about(9).len(), 1);
+        assert!(memory.recall(Kind::Encounter).iter().any(|r| r.strength == 0.9 && r.times == 1));
+    }
+
+    #[test]
+    fn a_full_memory_sums_up_before_it_forgets() {
+        // Twelve faint glimpses, in two places, each 4 m or more from the others there: more than
+        // it keeps of the kind.
+        let tuning = Tuning { most: 4, ..T };
+        let spots = [(0.0, 0.0), (4.0, 0.0), (0.0, 4.0), (4.0, 4.0), (-4.0, 0.0), (0.0, -4.0)];
+        let mut memory = Memory::<()>::new();
+        for (n, &(x, z)) in spots.iter().chain(&spots).enumerate() {
+            let x = x + if n < 6 { 0.0 } else { 30.0 };
+            memory.note(&tuning, Record::new(Kind::Encounter).at(Vector3::new(x, 0.0, z)).strength(0.3));
+        }
+        assert!(memory.len() <= 4);
+        let seen: u32 = memory.recall(Kind::Encounter).iter().map(|r| r.times).sum();
+        assert_eq!(seen, 12, "every glimpse counted in some record, none simply forgotten");
     }
 
     #[test]

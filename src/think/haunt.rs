@@ -132,8 +132,17 @@ impl Haunts {
         1.0 + tuning.lean.max(0.0) * around / (around + tuning.sure.max(1.0e-3))
     }
 
+    /// How much more a searcher should make of polygon `n`, for the haunts about it: from 1, none,
+    /// up to one and the tuning's `lean`. Give it to [`SearchMap::best_by`], so that a searcher
+    /// goes first where the player has turned up before, wherever the search has spread to.
+    pub fn weigh<'a>(&'a self, tuning: &'a Tuning, mesh: &'a NavMesh) -> impl Fn(crate::navigation::navmesh::Poly) -> f32 + 'a {
+        move |n| if self.haunts.is_empty() { 1.0 } else { self.weight(tuning, mesh, n) }
+    }
+
     /// Leans `map` on the haunts: where the player could be, weighed up where they have turned up
-    /// before (see [`SearchMap::lean`]). Lean it once they are lost, after [`SearchMap::lose`].
+    /// before (see [`SearchMap::lean`]). Only what is in `map` already is weighed: just after
+    /// [`SearchMap::lose`], that is where they were lost and nothing else, so a haunt further off
+    /// counts for nothing - use [`Haunts::weigh`] with [`SearchMap::best_by`] for that.
     pub fn lean(&self, tuning: &Tuning, mesh: &NavMesh, map: &mut SearchMap) {
         if !self.haunts.is_empty() {
             map.lean(|n| self.weight(tuning, mesh, n));

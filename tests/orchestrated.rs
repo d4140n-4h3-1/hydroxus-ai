@@ -74,9 +74,14 @@ impl World {
     }
 
     fn with(sentries: Vec<(Sentry, V, f32)>, player: V) -> Self {
+        Self::on(level(), sentries, player)
+    }
+
+    /// On a level of its own.
+    fn on(mesh: NavMesh, sentries: Vec<(Sentry, V, f32)>, player: V) -> Self {
         let bodies = sentries.iter().map(|&(_, feet, heading)| Body { feet, heading, route: Vec::new(), to: None }).collect();
         Self {
-            mesh: level(),
+            mesh,
             squad: Squad::new(&AI),
             sentries: sentries.into_iter().map(|(s, _, _)| s).collect(),
             bodies,
@@ -736,4 +741,60 @@ fn where_it_was_shot_at_feels_dangerous_when_it_is_back_there() {
     }
     assert!(there > 0.3, "back at the post where it was shot at: {there}");
     assert_eq!(away, 0.0, "elsewhere, nothing");
+}
+
+// Memory retrieval (ROADMAP 3.3).
+
+#[test]
+fn a_searcher_looks_first_where_it_remembers_finding_them_before() {
+    use hydroxus_ai::think::memory::Record;
+    // Mirrored about x = 18: a corridor (z 6..10, x 0..36) with a room off it either side of the
+    // middle, out of sight of each other and of the corridor - a doorway at x 7..9 north into a
+    // west room, x 2..14, and one at x 27..29 into an east room, x 22..34, both z 14..22. The
+    // sentry starts down a passage south of the middle (x 17..19, z 0..6). The passage, and the
+    // corridor's middle 4 m, are their own areas, so that the navmesh is cut the same both ways.
+    let two_rooms = || {
+        let mut grid = WalkGrid::new(36, 24, 1.0);
+        for z in 0..24 {
+            for x in 0..36 {
+                let passage = z < 6 && (17..19).contains(&x);
+                let corridor = (6..10).contains(&z);
+                let doorways = (10..14).contains(&z) && ((7..9).contains(&x) || (27..29).contains(&x));
+                let rooms = (14..22).contains(&z) && ((2..14).contains(&x) || (22..34).contains(&x));
+                grid.set(x, z, passage || corridor || doorways || rooms);
+            }
+        }
+        NavMesh::build(&grid, V::zeros(), |x, z| if z < 6 { 1 } else if (16..20).contains(&x) && z < 10 { 2 } else { 0 })
+    };
+    // Told the player is in the corridor's middle, it comes up the passage to search: by then
+    // they could be in either room. Which does it go into first?
+    let first_room = |remembered: Option<V>| {
+        let mut sentry = Sentry::new(Role::Sentry);
+        if let Some(there) = remembered {
+            sentry.memory.note(&AI.memory, Record::new(Kind::Investigation).at(there).outcome(1.0).importance(0.8));
+        }
+        let mut world = World::on(two_rooms(), vec![(sentry, at(18.0, 1.0), 0.0)], GONE);
+        // A witness saw them there five seconds ago, and has just come to tell it.
+        world.sentries[0].tell_from(at(18.0, 8.0), 5.0);
+        for _ in 0..(40 * 60) {
+            world.run(1.0 / 60.0, 1.0 / 60.0);
+            let feet = world.bodies[0].feet;
+            if feet.z > 14.5 {
+                return Some(if feet.x < 18.0 { "west" } else { "east" });
+            }
+        }
+        None
+    };
+    let plain = first_room(None).expect("it searched a room");
+    assert_eq!(first_room(Some(at(5.0, 20.0))), Some("west"), "remembering finding them in the west room (plain: {plain})");
+    assert_eq!(first_room(Some(at(31.0, 20.0))), Some("east"), "remembering finding them in the east room (plain: {plain})");
+
+    // What it recalled, and why: the memory fits the cue of where it lost them.
+    let mut sentry = Sentry::new(Role::Sentry);
+    sentry.memory.note(&AI.memory, Record::new(Kind::Investigation).at(at(37.0, 2.0)).outcome(1.0).importance(0.8));
+    sentry.memory.note(&AI.memory, Record::new(Kind::Investigation).at(at(10.0, 2.0)).outcome(-0.5));
+    sentry.memory.note(&AI.memory, Record::new(Kind::Investigation).at(at(39.0, 400.0)).outcome(1.0));
+    let recalled = sentry.recall_haunts(&AI, at(30.0, 6.0));
+    assert_eq!(recalled.len(), 1, "where it found them, near enough; not where it found nothing, nor far off: {recalled:?}");
+    assert!(recalled[0].1 > 0.0);
 }

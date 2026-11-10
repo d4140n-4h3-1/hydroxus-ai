@@ -218,6 +218,23 @@ impl SearchMap {
     /// meters - and at least `apart` meters from each of `taken`, where others are already going.
     /// None if nowhere is worth going to.
     pub fn best(&self, mesh: &NavMesh, from: Vector3<f32>, taken: &[Vector3<f32>], apart: f32, within: f32) -> Option<Vector3<f32>> {
+        self.best_by(mesh, from, taken, apart, within, |_| 1.0)
+    }
+
+    /// As [`SearchMap::best`], each polygon's worth times `weigh` of it as well: where this
+    /// searcher has reason to look first - where it found the player before, say (see
+    /// [`crate::think::haunt::Haunts::weigh`], or its own memory). Weighing at the choice,
+    /// rather than leaning the map ([`SearchMap::lean`]), counts wherever the chance has spread
+    /// to, however far from where they were lost.
+    pub fn best_by(
+        &self,
+        mesh: &NavMesh,
+        from: Vector3<f32>,
+        taken: &[Vector3<f32>],
+        apart: f32,
+        within: f32,
+        weigh: impl Fn(Poly) -> f32,
+    ) -> Option<Vector3<f32>> {
         let costs = mesh.costs_from(from, within, |_| 0.0);
         // Where there is any chance, and next to it.
         let mut near: Vec<Poly> = self.chance.keys().flat_map(|&n| std::iter::once(n).chain(mesh.portals(n).iter().map(|p| p.to))).collect();
@@ -234,7 +251,7 @@ impl SearchMap {
             if around <= 1.0e-6 {
                 continue;
             }
-            let worth = around / (1.0 + cost / self.tuning.halved_after);
+            let worth = around / (1.0 + cost / self.tuning.halved_after) * weigh(n).max(0.0);
             if best.is_none_or(|(b, _)| worth > b) {
                 best = Some((worth, at));
             }
@@ -242,10 +259,13 @@ impl SearchMap {
         best.map(|(_, at)| at)
     }
 
-    /// Weighs where they could be by `by`, as well, from nothing up - by where they have been
-    /// before, say (see [`crate::think::haunt`]) - and makes it up to the whole again. Only where
-    /// they could be is weighed: it never puts them anywhere they could not have got to. Weighed
-    /// to nothing everywhere, it is left as it was.
+    /// Weighs where they could be by `by`, as well, from nothing up, and makes it up to the whole
+    /// again. Only where they could be is weighed: it never puts them anywhere they could not
+    /// have got to. Weighed to nothing everywhere, it is left as it was.
+    ///
+    /// Just after [`SearchMap::lose`], the chance is all where they were lost: leaning it then only
+    /// weighs that, and the chance spreads on from there as if it had not been leant. To have a
+    /// searcher look first somewhere further off, weigh its choice instead ([`SearchMap::best_by`]).
     pub fn lean(&mut self, by: impl Fn(Poly) -> f32) {
         let total = self.total();
         let leaned: Vec<(Poly, f32)> = self.chance.iter().map(|(&n, &chance)| (n, chance * by(n).max(0.0))).collect();

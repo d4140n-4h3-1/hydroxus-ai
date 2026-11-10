@@ -485,6 +485,7 @@ impl Tuning {
         c.fraction("memory.forgotten", m.forgotten);
         c.fraction("memory.told", m.told);
         c.fraction("memory.outcome_rate", m.outcome_rate);
+        c.fraction("memory.consolidate_below", m.consolidate_below);
 
         let o = &self.orchestrate;
         c.positive("orchestrate.arrived", o.arrived);
@@ -498,6 +499,7 @@ impl Tuning {
         c.fraction("orchestrate.worth_a_look", o.worth_a_look);
         c.fraction("orchestrate.remembered_danger", o.remembered_danger);
         c.fraction("orchestrate.danger_noted", o.danger_noted);
+        c.some("orchestrate.recall_most", o.recall_most as f64);
 
         let p = &self.priority;
         c.positive("priority.committed_after", p.committed_after);

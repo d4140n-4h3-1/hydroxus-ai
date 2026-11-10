@@ -49,7 +49,7 @@ use crate::{
     },
     think::{
         experience::{Experience, Outcome, Venture},
-        memory::{Kind, Memory, Record},
+        memory::{Cue, Kind, Memory, Record},
     },
 };
 use nalgebra::Vector3;
@@ -101,6 +101,13 @@ pub const WORTH_A_LOOK: f32 = 0.3;
 pub const REMEMBERED_DANGER: f32 = 0.6;
 pub const DANGER_NEAR: f32 = 5.0;
 pub const DANGER_NOTED: f32 = 0.5;
+/// Losing the player, it recalls where it found them before, and where it lost them before, within
+/// how many meters, at most how many such memories; and leans the search map toward them, a
+/// polygon within how many meters of one up to how many times again as likely.
+pub const RECALL_WITHIN: f32 = 30.0;
+pub const RECALL_MOST: usize = 8;
+pub const MEMORY_LEAN: f32 = 1.0;
+pub const LEAN_NEAR: f32 = 4.0;
 
 tuning!(
     /// How the orchestration layer runs the modules together (see the module's constants).
@@ -142,6 +149,12 @@ tuning!(
         remembered_danger: f32 = REMEMBERED_DANGER,
         danger_near: f32 = DANGER_NEAR,
         danger_noted: f32 = DANGER_NOTED,
+        /// Losing the player, how far off it recalls where it found or lost them before, how many
+        /// such memories at most, how much it leans the search toward them, within how far.
+        recall_within: f32 = RECALL_WITHIN,
+        recall_most: usize = RECALL_MOST,
+        memory_lean: f32 = MEMORY_LEAN,
+        lean_near: f32 = LEAN_NEAR,
     }
 );
 
@@ -265,10 +278,14 @@ pub struct Sentry {
     /// Attentive after a disturbance: how long it has left, toward where, and how long it has
     /// stood looking that way.
     attentive: Option<(f32, Vector3<f32>, f32)>,
+    /// Where, about where it lost the player, it recalled finding and losing them before, and how
+    /// well each fits: where it searches first.
+    haunts: Vec<(Vector3<f32>, f32)>,
     /// Where it last saw the player, and which way they were going.
     last_seen: Option<Vector3<f32>>,
     going: Vector3<f32>,
-    told: Option<Vector3<f32>>,
+    /// Where it was told the player was, and how many seconds ago they were there.
+    told: Option<(Vector3<f32>, f32)>,
     feet: Vector3<f32>,
     heading: f32,
     happened: Vec<Happened>,
@@ -300,6 +317,7 @@ impl Sentry {
             threat: 0.0,
             pending: None,
             attentive: None,
+            haunts: Vec::new(),
             last_seen: None,
             going: Vector3::zeros(),
             told: None,
@@ -368,11 +386,19 @@ impl Sentry {
         }
     }
 
-    /// It is told the player is about `at`: by a witness, a radio call, an alarm. Unless it is
+    /// It is told the player is about `at`, just now: by a radio call, an alarm. Unless it is
     /// after them already, it searches there next frame.
     pub fn tell(&mut self, at: Vector3<f32>) {
+        self.tell_from(at, 0.0);
+    }
+
+    /// It is told the player was about `at`, `ago` seconds ago: by a witness that had to come and
+    /// find it, say. It searches for them as far as they could have got since - the search map
+    /// spread that far already - and is the less sure of it the older it is.
+    pub fn tell_from(&mut self, at: Vector3<f32>, ago: f32) {
         if at.iter().all(|v| v.is_finite()) {
-            self.told = Some(at);
+            let ago = if ago.is_finite() { ago.max(0.0) } else { 0.0 };
+            self.told = Some((at, ago));
         }
     }
 
@@ -493,7 +519,7 @@ impl Sentry {
         self.happened.push(Happened::InvestigationDone);
         self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Investigation));
         if let Some(spot) = spot {
-            self.memory.note(&tuning.memory, Record::new(Kind::Investigation).at(spot).outcome(crate::think::experience::UNPRODUCTIVE));
+            self.memory.note(&tuning.memory, Record::new(Kind::Investigation).at(spot).outcome(crate::think::experience::UNPRODUCTIVE).importance(0.2));
         }
         let o = &tuning.orchestrate;
         let left = self.pending.take().map(|(at, sure, since)| (at, sure * 0.5f32.powf(since / o.lead_half_life.max(1.0e-3))));
@@ -508,6 +534,36 @@ impl Sentry {
         self.goal = None;
         self.look = None;
         search.lose(mesh, at, going);
+        self.haunts = self.recall_haunts(tuning, at);
+    }
+
+    /// Where, about `at`, it remembers finding the player before - a search or a look that turned
+    /// them up - and losing them before, as much as each fits (see [`Memory::recall_for`]).
+    pub fn recall_haunts(&self, tuning: &crate::Tuning, at: Vector3<f32>) -> Vec<(Vector3<f32>, f32)> {
+        let o = &tuning.orchestrate;
+        let cue = Cue::of(&[Kind::Investigation, Kind::Place]).near(at, o.recall_within);
+        self.memory
+            .recall_for(&cue, o.recall_most)
+            .into_iter()
+            .filter(|(_, r)| r.kind == Kind::Place || r.outcome.is_some_and(|o| o > 0.0))
+            .filter_map(|(score, r)| r.at.map(|at| (at, score)))
+            .collect()
+    }
+
+    /// How much more this searcher makes of polygon `n` of `mesh`, for what it recalled when it lost
+    /// the player: from 1, up to one and the tuning's `memory_lean`, for a polygon within
+    /// `lean_near` of where it found or lost them before.
+    fn weigh_by_memory(&self, tuning: &crate::Tuning, mesh: &NavMesh, n: crate::navigation::navmesh::Poly) -> f32 {
+        let o = &tuning.orchestrate;
+        // How far each remembered spot is from the polygon - nothing if it is in it - rather than
+        // from its middle: a long polygon is near what is near any part of it.
+        let p = mesh.polygon(n);
+        let (cs, origin) = (mesh.cell_size, mesh.origin);
+        let (x0, x1) = (origin.x + p.x0 as f32 * cs, origin.x + p.x1 as f32 * cs);
+        let (z0, z1) = (origin.z + p.z0 as f32 * cs, origin.z + p.z1 as f32 * cs);
+        let away = |at: Vector3<f32>| (x0 - at.x).max(at.x - x1).max(0.0).hypot((z0 - at.z).max(at.z - z1).max(0.0));
+        let fit = self.haunts.iter().filter(|&&(at, _)| away(at) <= o.lean_near).map(|&(_, s)| s).fold(0.0, f32::max);
+        1.0 + o.memory_lean.max(0.0) * fit
     }
 
     /// Takes in what it senses this frame: awareness, the alert phase, and anything it was told.
@@ -525,7 +581,7 @@ impl Sentry {
         self.threat = unit(senses.threat);
         self.memory.step(&tuning.memory, dt);
         if self.threat >= tuning.orchestrate.danger_noted && senses.feet.iter().all(|v| v.is_finite()) {
-            self.memory.note(&tuning.memory, Record::new(Kind::Danger).at(senses.feet).strength(self.threat));
+            self.memory.note(&tuning.memory, Record::new(Kind::Danger).at(senses.feet).strength(self.threat).importance(self.threat));
         }
         self.sighting.1 += dt;
         self.lead.1 += dt;
@@ -554,10 +610,10 @@ impl Sentry {
             Some(Change::Spotted) if self.alert.is_none() => {
                 self.happened.push(Happened::Spotted);
                 self.wariness.note(&tuning.alert, Incident::Spotted);
-                self.memory.note(&tuning.memory, Record::new(Kind::Encounter).at(senses.player));
+                self.memory.note(&tuning.memory, Record::new(Kind::Encounter).at(senses.player).importance(0.7));
                 if let Some(look) = self.investigation {
                     // What it went to look into turned out to be them.
-                    self.memory.note(&tuning.memory, Record::new(Kind::Investigation).at(look.at).outcome(1.0));
+                    self.memory.note(&tuning.memory, Record::new(Kind::Investigation).at(look.at).outcome(1.0).importance(0.8));
                 }
                 self.investigation = None;
                 self.pending = None;
@@ -583,15 +639,17 @@ impl Sentry {
             self.sighting = (if visible > 0.0 { 1.0 } else { 0.8 }, 0.0);
         }
         // Told where to look: it searches there.
-        if let Some(there) = self.told.take().filter(|_| self.alert != Some(Alert::Alert)) {
+        if let Some((there, ago)) = self.told.take().filter(|_| self.alert != Some(Alert::Alert)) {
             self.wariness.note(&tuning.alert, Incident::Alarm);
             self.alert = Some(Alert::Evasion);
             self.last_seen = Some(there);
-            self.sighting = (unit(tuning.orchestrate.told), 0.0);
+            self.sighting = (unit(tuning.orchestrate.told), ago);
             self.going = Vector3::zeros();
             self.investigation = None;
             self.lost_at(tuning, search, mesh, there, None);
-            self.memory.note(&tuning.memory, Record::new(Kind::Event).at(there).secondhand());
+            // As far as they could have got since.
+            search.spread(mesh, tuning.orchestrate.getaway.max(0.0) * ago);
+            self.memory.note(&tuning.memory, Record::new(Kind::Event).at(there).secondhand().importance(0.4));
             self.happened.push(Happened::Told);
         }
         // The phases.
@@ -607,12 +665,14 @@ impl Sentry {
                     let at = self.last_seen.unwrap_or(self.feet);
                     let going = (self.going.norm() > 1.0e-3).then_some(self.going);
                     self.lost_at(tuning, search, mesh, at, going);
-                    self.memory.note(&tuning.memory, Record::new(Kind::Place).at(at));
+                    self.memory.note(&tuning.memory, Record::new(Kind::Place).at(at).importance(0.5));
                     self.experience.report(tuning, Some(mesh), Outcome::failed(Venture::Pursuit).at(at));
                 }
                 (Alert::Evasion | Alert::Caution, Some(Alert::Alert)) => {
                     self.happened.push(Happened::FoundAgain);
-                    self.memory.note(&tuning.memory, Record::new(Kind::Encounter).at(senses.player));
+                    // Found again: searching, a search that turned them up there.
+                    let found = if phase == Alert::Evasion { Kind::Investigation } else { Kind::Encounter };
+                    self.memory.note(&tuning.memory, Record::new(found).at(senses.player).outcome(1.0).importance(0.8));
                     self.goal = None;
                     self.look = None;
                     if phase == Alert::Evasion {
@@ -716,7 +776,8 @@ impl Sentry {
                         Intent::Face { heading: self.heading }
                     } else {
                         if self.goal.is_none() {
-                            self.goal = (!search.is_empty()).then(|| search.best(mesh, self.feet, taken, t.apart, t.within)).flatten();
+                            let weigh = |n| self.weigh_by_memory(tuning, mesh, n);
+                            self.goal = (!search.is_empty()).then(|| search.best_by(mesh, self.feet, taken, t.apart, t.within, weigh)).flatten();
                         }
                         match self.goal {
                             Some(at) => Intent::GoTo { at, pace: Pace::Search },

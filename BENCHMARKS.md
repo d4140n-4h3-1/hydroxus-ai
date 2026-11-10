@@ -158,6 +158,18 @@ After milestone 3.1 (each sentry stepping its memory and checking it for danger 
 runs: 250 sentries 0.159 ms a frame (worst 4.0 ms), 100 0.032 ms, 50 0.015 ms, 10 0.0027 ms -
 unchanged.
 
+## Memory retrieval (2026-11-10, milestone 3.3)
+
+`ai_bench`'s **memory** section: one memory full (32 records of each of 7 kinds, 224, over 200 m).
+Recalled by a `Cue` (dangers within 30 m of a spot, best 8), 100,000 times: 0.0005 ms each (worst
+0.005–0.006 ms); by kind 0.0004 ms; consolidating all of it 0.002–0.003 ms. A linear scan is
+enough at these sizes; an index would only pay at far larger memories than the defaults allow.
+
+The orchestrated squads, built from 5712923 (before) and from this milestone (after) and run
+alternately, three times each, 250 sentries: before 0.1778–0.1780 ms a frame, after
+0.1590–0.1773 ms. No regression. The same before-build measured 0.159 ms earlier in the day, so
+the machine itself varies by about 10% across a session; only side-by-side runs are comparable.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide
