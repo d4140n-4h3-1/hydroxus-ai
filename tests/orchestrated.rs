@@ -748,24 +748,7 @@ fn where_it_was_shot_at_feels_dangerous_when_it_is_back_there() {
 #[test]
 fn a_searcher_looks_first_where_it_remembers_finding_them_before() {
     use hydroxus_ai::think::memory::Record;
-    // Mirrored about x = 18: a corridor (z 6..10, x 0..36) with a room off it either side of the
-    // middle, out of sight of each other and of the corridor - a doorway at x 7..9 north into a
-    // west room, x 2..14, and one at x 27..29 into an east room, x 22..34, both z 14..22. The
-    // sentry starts down a passage south of the middle (x 17..19, z 0..6). The passage, and the
-    // corridor's middle 4 m, are their own areas, so that the navmesh is cut the same both ways.
-    let two_rooms = || {
-        let mut grid = WalkGrid::new(36, 24, 1.0);
-        for z in 0..24 {
-            for x in 0..36 {
-                let passage = z < 6 && (17..19).contains(&x);
-                let corridor = (6..10).contains(&z);
-                let doorways = (10..14).contains(&z) && ((7..9).contains(&x) || (27..29).contains(&x));
-                let rooms = (14..22).contains(&z) && ((2..14).contains(&x) || (22..34).contains(&x));
-                grid.set(x, z, passage || corridor || doorways || rooms);
-            }
-        }
-        NavMesh::build(&grid, V::zeros(), |x, z| if z < 6 { 1 } else if (16..20).contains(&x) && z < 10 { 2 } else { 0 })
-    };
+    let two_rooms = mirrored_rooms;
     // Told the player is in the corridor's middle, it comes up the passage to search: by then
     // they could be in either room. Which does it go into first?
     let first_room = |remembered: Option<V>| {
@@ -797,4 +780,78 @@ fn a_searcher_looks_first_where_it_remembers_finding_them_before() {
     let recalled = sentry.recall_haunts(&AI, at(30.0, 6.0));
     assert_eq!(recalled.len(), 1, "where it found them, near enough; not where it found nothing, nor far off: {recalled:?}");
     assert!(recalled[0].1 > 0.0);
+}
+
+/// Mirrored about x = 18: a corridor (z 6..10, x 0..36) with a room off it either side of the
+/// middle, out of sight of each other and of the corridor - a doorway at x 7..9 north into a west
+/// room, x 2..14, and one at x 27..29 into an east room, x 22..34, both z 14..22 - and a passage
+/// south of the middle (x 17..19, z 0..6), out of sight of most of it. The passage, and the
+/// corridor's middle 4 m, are their own areas, so that the navmesh is cut the same both ways.
+fn mirrored_rooms() -> NavMesh {
+    let mut grid = WalkGrid::new(36, 24, 1.0);
+    for z in 0..24 {
+        for x in 0..36 {
+            let passage = z < 6 && (17..19).contains(&x);
+            let corridor = (6..10).contains(&z);
+            let doorways = (10..14).contains(&z) && ((7..9).contains(&x) || (27..29).contains(&x));
+            let rooms = (14..22).contains(&z) && ((2..14).contains(&x) || (22..34).contains(&x));
+            grid.set(x, z, passage || corridor || doorways || rooms);
+        }
+    }
+    NavMesh::build(&grid, V::zeros(), |x, z| if z < 6 { 1 } else if (16..20).contains(&x) && z < 10 { 2 } else { 0 })
+}
+
+// Learning evaluated (ROADMAP 4.2).
+
+#[test]
+fn over_repeated_searches_a_sentry_that_remembers_finds_them_sooner_and_one_that_does_not_does_not() {
+    use hydroxus_ai::think::evaluate::{judge, Judgement, Tally};
+    // A player who always hides in the east room; told of them in the corridor some seconds ago
+    // each time, a sentry comes up the passage to search. Left to itself it tries the west room
+    // first. How long, each time, till it finds them?
+    let hideout = at(31.0, 20.0);
+    let episode = |sentry: Sentry, ago: f32| -> (Sentry, f32) {
+        let mut world = World::on(mirrored_rooms(), vec![(sentry, at(18.0, 1.0), 0.0)], hideout);
+        world.sentries[0].tell_from(at(18.0, 8.0), ago);
+        for _ in 0..(60 * 60) {
+            world.run(1.0 / 60.0, 1.0 / 60.0);
+            if world.first(0, Happened::FoundAgain).is_some() {
+                break;
+            }
+        }
+        let took = world.first(0, Happened::FoundAgain).unwrap_or(60.0);
+        (world.sentries.remove(0), took)
+    };
+    let carry = |had: &Sentry| {
+        let mut next = Sentry::new(Role::Sentry);
+        next.memory = had.memory.clone();
+        next.experience = had.experience.clone();
+        next
+    };
+    let ages = [3.0, 4.5, 6.0, 3.5, 5.0, 7.0, 4.0, 5.5];
+    let mut remembering = Sentry::new(Role::Sentry);
+    let (mut learned, mut unlearned) = (Vec::new(), Vec::new());
+    for &ago in &ages {
+        let (had, took) = episode(carry(&remembering), ago);
+        remembering = had;
+        learned.push(took);
+        let (_, took) = episode(Sentry::new(Role::Sentry), ago);
+        unlearned.push(took);
+    }
+    println!("seconds to find them, remembering: {learned:?}; fresh each time: {unlearned:?}");
+    // The first time, both are the same: neither knows anything.
+    assert!((learned[0] - unlearned[0]).abs() < 1.0e-3);
+    // After that, the one that remembers finds them sooner, and the fresh one no sooner than it
+    // did the first time. (The world is deterministic, and how old the report is turns out not to
+    // change the times here, so each side has no spread and the means alone decide.)
+    let tally = |xs: &[f32]| {
+        let mut t = Tally::default();
+        for &x in xs {
+            t.add(-x);
+        }
+        t
+    };
+    let (after, control) = (tally(&learned[1..]), tally(&unlearned[1..]));
+    assert!(matches!(judge(&control, &after, 1.96, 5), Judgement::Better { by } if by > 2.0), "{:?} against {:?}", after.mean(), control.mean());
+    assert!(unlearned[1..].iter().all(|&t| t > learned[0] - 3.0));
 }

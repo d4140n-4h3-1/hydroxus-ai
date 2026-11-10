@@ -16,9 +16,12 @@
 //!   search to look first and a patrol to go by.
 //! - [`memory`]: what one NPC remembers having happened, one record each - places, characters,
 //!   encounters, events, dangers, groups, investigations - fading by kind, and told on.
+//! - [`evaluate`]: whether what an NPC changed made it do better: each approach's outcomes, its
+//!   changes of habit, each judged better, worse or no clear difference, and how settled it is.
 //! - [`experience`]: what an NPC has been through: one place for a game to say how what it did
 //!   turned out, taken to its lessons, the player's habits and haunts, and weighing what it does.
 
+pub mod evaluate;
 pub mod experience;
 pub mod habit;
 pub mod haunt;
