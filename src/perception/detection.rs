@@ -131,10 +131,11 @@ impl Detection {
             self.unseen = 0.0;
             self.level = (self.level + visible * eagerness.max(0.0) * dt / tuning.fill.max(1.0e-3)).min(1.0);
         } else {
+            // Draining only for the part of `dt` past `forget_after` unseen, so that a long step
+            // drains as much as many short ones would.
+            let over = (self.unseen + dt - tuning.forget_after).clamp(0.0, dt.max(0.0));
             self.unseen += dt;
-            if self.unseen > tuning.forget_after {
-                self.level = (self.level - tuning.drain * dt).max(0.0);
-            }
+            self.level = (self.level - tuning.drain * over).max(0.0);
         }
         change(was, self.stage(tuning))
     }
