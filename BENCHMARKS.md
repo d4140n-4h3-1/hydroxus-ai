@@ -67,6 +67,46 @@ One of the two arena runs on 2026-11-10 stopped before writing its report, with 
 its log; its exit status was not captured. The re-run completed normally (exit 0, 241 s). The
 cause is not known.
 
+## After milestone 1.2 (2026-11-10, hydroxus-ai 0b0b98f, game 5c7b530)
+
+The first battle runs with the `Detection` frame-rate fix (946f697). `Tuning::validate` and
+the refusal of unknown field names run only when a game asks for them or reads a file, so neither
+touches a frame. Both battles exited 0 after 240 s.
+
+`ai_bench`, three runs:
+
+| What | Run 1 | Run 2 | Run 3 |
+|------|-------|-------|-------|
+| Traffic: network built | 0.22 ms | 0.23 ms | 0.22 ms |
+| Traffic: a step, mean (worst) | 0.0519 ms (0.233) | 0.0519 ms (0.087) | 0.0515 ms (0.082) |
+| Patrol: 50 drones, a frame, mean (worst) | 0.0028 ms (0.028) | 0.0025 ms (0.008) | 0.0025 ms (0.008) |
+| Flight: 2,000 routes | 2.00 ms | 1.97 ms | 1.99 ms |
+
+Run 1's worst traffic step (0.233 ms) is a one-off; the other two runs and every earlier run stay
+near 0.1 ms.
+
+Team battle, seed 1, 240 s, ms per frame (mean / p50 / p95 / p99 / max):
+
+| Part | Arena | Forest |
+|------|-------|--------|
+| think | 0.052 / 0.012 / 0.101 / 1.894 / 2.952 | 0.063 / 0.007 / 0.241 / 1.981 / 5.050 |
+| move | 0.002 / 0.002 / 0.003 / 0.003 / 0.016 | 0.002 / 0.002 / 0.002 / 0.003 / 0.011 |
+| show | 0.280 / 0.263 / 0.466 / 0.563 / 1.652 | 0.233 / 0.242 / 0.327 / 0.406 / 0.773 |
+| bolts | 0.011 / 0.003 / 0.063 / 0.103 / 0.327 | 0.005 / 0.001 / 0.047 / 0.091 / 0.418 |
+| whole frame, p50 / p95 / p99 | 16.728 / 18.418 / 32.688 | 16.727 / 19.581 / 32.716 |
+| Frames (fps) | 12,795 (53) | 11,912 (50) |
+| Shot down, bolts, walked, frames with a target | 15, 1,999, 2,722 m, 85% | 1, 623, 2,178 m, 59% |
+
+The AI ("think") is within run-to-run noise of the 2026-11-08 and earlier 2026-11-10 runs:
+0.049–0.052 ms mean in the arena, 0.063–0.079 ms in the forest.
+
+**Limitation: the same seed is not the same battle.** `BATTLE_SEED` fixes the random choices,
+but each frame's length comes from the real clock, so the battles drift apart. The arena went
+9–5 with 14 shot down in one run and 10–5 with 15 in the next; the forest 1–2 with 3, then 1–0
+with 1. Fewer fights mean less for the AI to think about, so differences of 10–20% in "think"
+between runs are expected without any change to the code. A fixed-step mode for the benchmark
+would make runs comparable frame for frame (ROADMAP 7.1).
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide
