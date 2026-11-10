@@ -222,6 +222,8 @@ pub struct Tuning {
     pub habit: crate::think::habit::Tuning,
     /// Learning where the player turns up.
     pub haunt: crate::think::haunt::Tuning,
+    /// What an NPC remembers, and for how long.
+    pub memory: crate::think::memory::Tuning,
     /// Running the modules together, optionally (see [`orchestrate`]).
     pub orchestrate: crate::orchestrate::Tuning,
     /// Weighing what to do by the situation and the NPC's traits.
@@ -270,6 +272,7 @@ impl Tuning {
         lesson: crate::think::lesson::Tuning::DEFAULT,
         habit: crate::think::habit::Tuning::DEFAULT,
         haunt: crate::think::haunt::Tuning::DEFAULT,
+        memory: crate::think::memory::Tuning::DEFAULT,
         orchestrate: crate::orchestrate::Tuning::DEFAULT,
         priority: crate::tactics::priority::Tuning::DEFAULT,
     };

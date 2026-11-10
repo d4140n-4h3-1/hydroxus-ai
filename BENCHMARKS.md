@@ -154,6 +154,10 @@ After milestone 2.2 (priorities weighed every frame by every sentry), two runs: 
 After milestone 2.3 (persistence), two runs: 250 sentries 0.165–0.174 ms a frame (worst 4.0–4.5
 ms), 100 0.034–0.035 ms, 50 0.015–0.016 ms, 10 0.0026–0.0029 ms - unchanged from 2.2.
 
+After milestone 3.1 (each sentry stepping its memory and checking it for danger each frame), two
+runs: 250 sentries 0.159 ms a frame (worst 4.0 ms), 100 0.032 ms, 50 0.015 ms, 10 0.0027 ms -
+unchanged.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide

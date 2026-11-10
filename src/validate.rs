@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 40] = [
+        let modules: [(&str, Vec<(String, f64)>); 41] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -270,6 +270,7 @@ impl Tuning {
             ("lesson", self.lesson.numbers()),
             ("habit", self.habit.numbers()),
             ("haunt", self.haunt.numbers()),
+            ("memory", self.memory.numbers()),
             ("orchestrate", self.orchestrate.numbers()),
             ("priority", self.priority.numbers()),
         ];
@@ -284,7 +285,7 @@ impl Tuning {
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
                     "cover", "team", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
-                    "passing", "lesson", "habit", "haunt", "orchestrate", "priority",
+                    "passing", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
                 ]
                 .map(String::from),
             )
@@ -477,6 +478,14 @@ impl Tuning {
         c.fraction("haunt.told", haunt.told);
         c.some("haunt.most", haunt.most as f64);
 
+        let m = &self.memory;
+        for kind in crate::think::memory::Kind::ALL {
+            c.positive(&format!("memory.{}_half_life", format!("{kind:?}").to_lowercase()), m.half_life(kind));
+        }
+        c.fraction("memory.forgotten", m.forgotten);
+        c.fraction("memory.told", m.told);
+        c.fraction("memory.outcome_rate", m.outcome_rate);
+
         let o = &self.orchestrate;
         c.positive("orchestrate.arrived", o.arrived);
         c.positive("orchestrate.look_every", o.look_every);
@@ -485,6 +494,10 @@ impl Tuning {
         c.positive("orchestrate.lead_half_life", o.lead_half_life);
         c.fraction("orchestrate.told", o.told);
         c.fraction("orchestrate.switch_lead_by", o.switch_lead_by);
+        c.fraction("orchestrate.recheck", o.recheck);
+        c.fraction("orchestrate.worth_a_look", o.worth_a_look);
+        c.fraction("orchestrate.remembered_danger", o.remembered_danger);
+        c.fraction("orchestrate.danger_noted", o.danger_noted);
 
         let p = &self.priority;
         c.positive("priority.committed_after", p.committed_after);

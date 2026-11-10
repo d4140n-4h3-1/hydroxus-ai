@@ -47,7 +47,10 @@ use crate::{
         priority::{self, Context, Traits},
         search::SearchMap,
     },
-    think::experience::{Experience, Outcome, Venture},
+    think::{
+        experience::{Experience, Outcome, Venture},
+        memory::{Kind, Memory, Record},
+    },
 };
 use nalgebra::Vector3;
 
@@ -88,6 +91,16 @@ pub const SWITCH_LEAD_BY: f32 = 0.25;
 pub const ATTENTIVE_FOR: f32 = 8.0;
 pub const ATTENTIVE_KEENNESS: f32 = 1.5;
 pub const LINGER: f32 = 1.5;
+/// Memory: how much less sure of a lead it is where it looked lately and found nothing, at most;
+/// and how sure a lead has to be, at least, for a calm sentry to go and look rather than only
+/// look that way.
+pub const RECHECK: f32 = 0.75;
+pub const WORTH_A_LOOK: f32 = 0.3;
+/// How dangerous a place it remembers coming to harm feels, at most, from 0 to 1, within how many
+/// meters of it; and how dangerous things have to be for it to remember the place.
+pub const REMEMBERED_DANGER: f32 = 0.6;
+pub const DANGER_NEAR: f32 = 5.0;
+pub const DANGER_NOTED: f32 = 0.5;
 
 tuning!(
     /// How the orchestration layer runs the modules together (see the module's constants).
@@ -120,6 +133,15 @@ tuning!(
         attentive_for: f32 = ATTENTIVE_FOR,
         attentive_keenness: f32 = ATTENTIVE_KEENNESS,
         linger: f32 = LINGER,
+        /// How much less sure of a lead it is where it looked lately and found nothing, at most;
+        /// and how sure a lead has to be for a calm sentry to go and look.
+        recheck: f32 = RECHECK,
+        worth_a_look: f32 = WORTH_A_LOOK,
+        /// How dangerous a place it remembers coming to harm feels, at most, within how far of
+        /// it; and how dangerous things have to be for it to remember the place.
+        remembered_danger: f32 = REMEMBERED_DANGER,
+        danger_near: f32 = DANGER_NEAR,
+        danger_noted: f32 = DANGER_NOTED,
     }
 );
 
@@ -215,6 +237,9 @@ pub struct Sentry {
     pub experience: Experience,
     /// What kind of NPC it is: aggressive, cautious, curious (see [`priority`]).
     pub traits: Traits,
+    /// What it remembers having happened (see [`crate::think::memory`]): where it saw and lost
+    /// the player, where it looked and what it found, what it was told, where it came to harm.
+    pub memory: Memory,
     alert: Option<Alert>,
     /// Seconds left of its phase, Evasion or Caution.
     left: f32,
@@ -259,6 +284,7 @@ impl Sentry {
             wariness: Wariness::default(),
             experience: Experience::new(),
             traits: Traits::NEUTRAL,
+            memory: Memory::new(),
             alert: None,
             left: 0.0,
             investigation: None,
@@ -331,9 +357,11 @@ impl Sentry {
             Some(Alert::Caution) => 0.2,
             None => 0.0,
         };
+        let remembered = self.memory.strength_near(Kind::Danger, self.feet, o.danger_near) * o.remembered_danger.clamp(0.0, 1.0);
+        let threat = self.threat.max(remembered);
         Context {
-            urgency: pressing.max(self.threat),
-            threat: self.threat,
+            urgency: pressing.max(threat),
+            threat,
             sighting: self.last_seen.map(|_| fade(self.sighting, o.sighting_half_life)),
             lead: self.investigation.map(|_| fade(self.lead, o.lead_half_life)),
             doing: self.conduct.map(|c| (c, self.doing_for)),
@@ -359,9 +387,10 @@ impl Sentry {
         let eagerness = self.eagerness(tuning);
         self.wariness.note(&tuning.alert, Incident::Heard);
         let noticed = self.detection.hear(&tuning.detection, nearness, eagerness) == Some(Change::Noticed);
-        let nearness = unit(nearness);
+        // Where it looked lately and found nothing, it is the less sure of it.
+        let nearness = unit(nearness) * (1.0 - self.looked_lately(tuning, at) * tuning.orchestrate.recheck.clamp(0.0, 1.0));
         match self.alert {
-            None if noticed || self.investigation.is_some() && nearness > 0.0 => (),
+            None if (noticed || self.investigation.is_some()) && nearness >= tuning.orchestrate.worth_a_look => (),
             Some(Alert::Evasion | Alert::Caution) if nearness > 0.0 => (),
             // Too faint to look into: it is attentive that way a while.
             None if nearness > 0.0 => {
@@ -384,6 +413,16 @@ impl Sentry {
             // Otherwise it waits its turn.
             Some(_) => self.wait(Some((at, nearness, 0.0))),
         }
+    }
+
+    /// How strongly it remembers looking near `at` lately and finding nothing, from 0 to 1.
+    fn looked_lately(&self, tuning: &crate::Tuning, at: Vector3<f32>) -> f32 {
+        self.memory
+            .near(Kind::Investigation, at, tuning.memory.same_within)
+            .iter()
+            .filter(|r| r.outcome.is_some_and(|o| o < 0.0))
+            .map(|r| r.strength)
+            .fold(0.0, f32::max)
     }
 
     /// It goes to look at `at`, as sure of it as `sure`.
@@ -453,6 +492,9 @@ impl Sentry {
         self.investigation = None;
         self.happened.push(Happened::InvestigationDone);
         self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Investigation));
+        if let Some(spot) = spot {
+            self.memory.note(&tuning.memory, Record::new(Kind::Investigation).at(spot).outcome(crate::think::experience::UNPRODUCTIVE));
+        }
         let o = &tuning.orchestrate;
         let left = self.pending.take().map(|(at, sure, since)| (at, sure * 0.5f32.powf(since / o.lead_half_life.max(1.0e-3))));
         match left.filter(|&(_, sure)| sure >= LEAD_FORGOTTEN) {
@@ -481,6 +523,10 @@ impl Sentry {
         }
         let player_known = senses.player.iter().all(|v| v.is_finite());
         self.threat = unit(senses.threat);
+        self.memory.step(&tuning.memory, dt);
+        if self.threat >= tuning.orchestrate.danger_noted && senses.feet.iter().all(|v| v.is_finite()) {
+            self.memory.note(&tuning.memory, Record::new(Kind::Danger).at(senses.feet).strength(self.threat));
+        }
         self.sighting.1 += dt;
         self.lead.1 += dt;
         if let Some((_, _, since)) = self.pending.as_mut() {
@@ -508,6 +554,11 @@ impl Sentry {
             Some(Change::Spotted) if self.alert.is_none() => {
                 self.happened.push(Happened::Spotted);
                 self.wariness.note(&tuning.alert, Incident::Spotted);
+                self.memory.note(&tuning.memory, Record::new(Kind::Encounter).at(senses.player));
+                if let Some(look) = self.investigation {
+                    // What it went to look into turned out to be them.
+                    self.memory.note(&tuning.memory, Record::new(Kind::Investigation).at(look.at).outcome(1.0));
+                }
                 self.investigation = None;
                 self.pending = None;
                 self.attentive = None;
@@ -540,6 +591,7 @@ impl Sentry {
             self.going = Vector3::zeros();
             self.investigation = None;
             self.lost_at(tuning, search, mesh, there, None);
+            self.memory.note(&tuning.memory, Record::new(Kind::Event).at(there).secondhand());
             self.happened.push(Happened::Told);
         }
         // The phases.
@@ -555,10 +607,12 @@ impl Sentry {
                     let at = self.last_seen.unwrap_or(self.feet);
                     let going = (self.going.norm() > 1.0e-3).then_some(self.going);
                     self.lost_at(tuning, search, mesh, at, going);
+                    self.memory.note(&tuning.memory, Record::new(Kind::Place).at(at));
                     self.experience.report(tuning, Some(mesh), Outcome::failed(Venture::Pursuit).at(at));
                 }
                 (Alert::Evasion | Alert::Caution, Some(Alert::Alert)) => {
                     self.happened.push(Happened::FoundAgain);
+                    self.memory.note(&tuning.memory, Record::new(Kind::Encounter).at(senses.player));
                     self.goal = None;
                     self.look = None;
                     if phase == Alert::Evasion {

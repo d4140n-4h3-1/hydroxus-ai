@@ -10,6 +10,7 @@ use hydroxus_ai::{
     navigation::{grid::WalkGrid, navmesh::NavMesh, walk::route_to},
     orchestrate::{Happened, Intent, Pace, Senses, Sentry, Squad},
     tactics::priority::{self, Traits},
+    think::memory::Kind,
     perception::sight::{Sight, Stance},
     tactics::conduct::{Conduct, Reasoners, Role},
     Tuning,
@@ -63,6 +64,8 @@ struct World {
     intents: Vec<Intent>,
     /// The tuning it runs by: `AI`, unless a test changes it.
     ai: Tuning,
+    /// How dangerous things are for every sentry: shot at, say.
+    threat: f32,
 }
 
 impl World {
@@ -84,6 +87,7 @@ impl World {
             log: Vec::new(),
             intents: Vec::new(),
             ai: AI,
+            threat: 0.0,
         }
     }
 
@@ -130,7 +134,7 @@ impl World {
                 } else {
                     0.0
                 };
-                Senses { feet: body.feet, heading: body.heading, visible, player: self.player, threat: 0.0 }
+                Senses { feet: body.feet, heading: body.heading, visible, player: self.player, threat: self.threat }
             })
             .collect();
         let feet: Vec<V> = self.bodies.iter().map(|b| b.feet).collect();
@@ -661,4 +665,75 @@ fn persistence_can_be_switched_off() {
     world.run(0.2, 1.0 / 60.0);
     assert_eq!(looking_into(&world), Some(second));
     assert!(world.first(0, Happened::InvestigationDone).is_none(), "the first given up unfinished");
+}
+
+// Memory (ROADMAP 3.1).
+
+#[test]
+fn what_happens_to_it_is_remembered() {
+    let world = incident(|_| 1.0 / 60.0);
+    let memory = &world.sentries[0].memory;
+    let spotted = memory.recall(Kind::Encounter);
+    assert!(spotted.len() == 1 && spotted[0].at.is_some_and(|seen| flat(seen - at(20.0, 2.0)).norm() < 0.5), "{spotted:?}");
+    let lost = memory.recall(Kind::Place);
+    assert!(lost.len() == 1 && lost[0].firsthand, "where it lost them: {lost:?}");
+
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    world.sentries[0].hear(&AI, at(15.0, 2.0), 0.8);
+    world.run(25.0, 1.0 / 60.0);
+    let looked = world.sentries[0].memory.recall(Kind::Investigation);
+    assert!(looked.len() == 1 && looked[0].outcome.is_some_and(|o| o < 0.0), "a look that found nothing: {looked:?}");
+
+    let mut world = World::new(&[(at(4.0, 2.0), EAST)], GONE);
+    world.sentries[0].tell(at(30.0, 12.0));
+    world.run(0.5, 1.0 / 60.0);
+    let told = world.sentries[0].memory.recall(Kind::Event);
+    assert!(told.len() == 1 && !told[0].firsthand, "what it was told, secondhand");
+}
+
+#[test]
+fn it_does_not_walk_back_to_look_where_it_just_looked_till_it_has_half_forgotten() {
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    let spot = at(15.0, 2.0);
+    let looks = |world: &World| world.log.iter().filter(|&&(_, _, h)| h == Happened::Noticed).count();
+    world.sentries[0].hear(&AI, spot, 0.8);
+    world.run(25.0, 1.0 / 60.0);
+    assert_eq!((looks(&world), world.first(0, Happened::InvestigationDone).is_some()), (1, true));
+    // The same noise from the same spot, a little after: a glance that way, not another walk.
+    world.run(10.0, 1.0 / 60.0);
+    world.sentries[0].hear(&AI, spot, 0.8);
+    world.run(0.5, 1.0 / 60.0);
+    assert_eq!(looks(&world), 1, "{:?}", world.log);
+    assert!(world.sentries[0].attentive() && matches!(world.intents[0], Intent::Face { .. }));
+    // Ten minutes on, the look half forgotten: it goes to look again.
+    world.run(600.0, 0.5);
+    world.sentries[0].hear(&AI, spot, 0.8);
+    world.run(0.5, 1.0 / 60.0);
+    assert_eq!(looks(&world), 2);
+    assert_eq!(world.sentries[0].investigating(), Some(spot));
+}
+
+#[test]
+fn where_it_was_shot_at_feels_dangerous_when_it_is_back_there() {
+    let sentry = Sentry::new(Role::Sentry).with_beat(vec![at(4.0, 2.0), at(30.0, 2.0)]);
+    let mut world = World::with(vec![(sentry, at(4.0, 2.0), EAST)], GONE);
+    // Shot at, standing at the first post.
+    world.threat = 0.9;
+    world.run(0.2, 1.0 / 60.0);
+    world.threat = 0.0;
+    assert_eq!(world.sentries[0].memory.recall(Kind::Danger).len(), 1);
+    let (mut there, mut away) = (0.0f32, 1.0f32);
+    for _ in 0..(80 * 60) {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        let threat = world.sentries[0].context(&AI).threat;
+        let x = world.bodies[0].feet.x;
+        if x < 5.0 {
+            there = there.max(threat);
+        }
+        if x > 20.0 {
+            away = away.min(threat);
+        }
+    }
+    assert!(there > 0.3, "back at the post where it was shot at: {there}");
+    assert_eq!(away, 0.0, "elsewhere, nothing");
 }

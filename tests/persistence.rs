@@ -131,6 +131,7 @@ fn an_orchestrated_squad_saved_mid_search_carries_on_as_if_never_saved() {
         squad.step(&AI, &mesh, &mut reasoners, &mut sentries, &senses(visible), false, |_, _| true, 1.0 / 60.0);
     }
     assert!(sentries[0].alert().is_some());
+    assert!(!sentries[0].memory.is_empty(), "it remembers seeing them, and saving keeps that");
     let saved = serde_json::to_string(&(&squad, &sentries)).unwrap();
     let (mut squad2, mut sentries2): (Squad, Vec<Sentry>) = serde_json::from_str(&saved).unwrap();
     let mut reasoners2 = Reasoners::default();
