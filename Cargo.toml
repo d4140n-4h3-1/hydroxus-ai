@@ -2,6 +2,8 @@
 name = "hydroxus-ai"
 version = "0.1.0"
 edition = "2021"
+# nalgebra 0.35 needs 1.89; checked with `cargo +1.89 test --all-features`.
+rust-version = "1.89"
 license = "MIT"
 description = "AI for Hydroxus games: perception (sight only in front, hearing along the corridors), tactics (searching, chasing, cover, fighting as a team) and navigation (a walk grid, routes, trains and driving), with Metal Gear's alert phases."
 repository = "https://github.com/d4140n-4h3-1/hydroxus-ai"

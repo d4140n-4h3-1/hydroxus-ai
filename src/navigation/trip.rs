@@ -380,7 +380,7 @@ mod tests {
         let mut grid = WalkGrid::new(60, 21, 1.0);
         for z in 0..21 {
             for x in 0..60 {
-                grid.set(x, z, z < 8 || z > 12 || x > 55);
+                grid.set(x, z, !(8..=12).contains(&z) || x > 55);
             }
         }
         let crossing = Crossing {

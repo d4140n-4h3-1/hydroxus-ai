@@ -32,6 +32,9 @@ tuning!(
 /// meters round it is theirs - and off polygons it cannot get to (`reachable`): to somewhere off
 /// them, the way that crosses them least (see [`plan_avoiding`]). One that finds itself on a road,
 /// as it might after a chase, gets off it the shortest way. Empty, with nowhere found to go.
+// Each argument is a separate thing the game already holds; bundling them would only move the
+// count into a struct the game fills each call, and break the public API for nothing.
+#[allow(clippy::too_many_arguments)]
 pub fn wander(
     tuning: &Tuning,
     mesh: &NavMesh,

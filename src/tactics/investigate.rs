@@ -89,7 +89,7 @@ impl Investigation {
             return Doing::Done;
         }
         let to = flat(self.at - feet);
-        let towards = (to.norm() > 1.0e-3).then(|| to.x.atan2(to.z)).unwrap_or(heading);
+        let towards = if to.norm() > 1.0e-3 { to.x.atan2(to.z) } else { heading };
         match self.step {
             Step::Pause { left } if left > dt => {
                 self.step = Step::Pause { left: left - dt };

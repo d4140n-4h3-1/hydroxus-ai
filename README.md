@@ -74,6 +74,7 @@ It is in five folders, and its alert phases besides.
 | `lesson` | What has worked: each thing an NPC could do weighed up or down by how it turned out the times it did it - a run of outcomes moving it, one fluke not - weighing a utility reasoner's choice, never opening what its considerations shut nor barring what failed; fading back over minutes, and told on to others at half strength, so a squad comes to think alike. |
 | `habit` | The player's habits: how often, lately, they do each of the things a game tells apart - the way they come in, the trick they use - and how much an NPC expects each next, for how much it has seen; fading, so a player who changes their ways is met afresh, and told on. |
 | `haunt` | Where the player keeps turning up: where they were seen and found hiding, by navmesh cell, fading and told on; a search map leaned on them looks there first - only where they could have got to since - and a patrol can go by the likeliest. |
+| `experience` | What one NPC has been through: a game says how something it tried turned out - a search, a look, a chase, keeping safe, working with another - and it goes to what it did lately that the outcome is down to (each by how lately), to where the player hides and to their habits; its choice weighed by it, and a verdict when it comes to think something works or is no use. |
 
 ### Besides
 
@@ -130,6 +131,19 @@ The crate does not choose what an NPC says. What came of what it did is an event
 `tactics::patrol::Event` (`Spotted`, `Searching`, `Alarmed`, `Calm`), a witness's
 `social::report::Telling`, a ride's `navigation::ride::Rides`, a threat's `tactics::threat::Threat`
 - and the game maps it to its own lines, sounds or UI.
+
+## Rust version and checks
+
+Rust 1.89 or newer (nalgebra 0.35's own minimum; `rust-version` in `Cargo.toml`). CI
+(`.github/workflows/ci.yml`, once pushed) builds and tests on stable and 1.89, with and without the `serde`
+feature, and fails on any clippy or rustdoc warning. Locally:
+
+```sh
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Where the crate is headed, and how far each part has got, is in [ROADMAP.md](ROADMAP.md).
 
 ## License
 
