@@ -22,7 +22,8 @@
 //!   settles on what works changes rarely; one chasing noise, often.
 //!
 //! The comparison is Welch's: the difference of the two means over its standard error, each side's
-//! variance its own. It is a normal approximation, good from a dozen or so attempts a side.
+//! variance its own but no less than both sides' together. It is a normal approximation, good
+//! from a dozen or so attempts a side.
 
 /// Running figures of one set of outcomes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -214,7 +215,9 @@ impl<A: Copy + PartialEq> Evaluation<A> {
 
 /// Whether `after` did better than `before`: by Welch's test, the difference of their means over
 /// its standard error past `z` (1.96 for 95% confidence), with at least `least` outcomes each
-/// (and two, to have a spread). Two sides without any spread at all are judged by their means.
+/// (and two, to have a spread) - each side's variance taken as no less than both sides' together,
+/// so that a small side that happened to come out all the same is not taken as certain. Two sides
+/// without any spread at all, together, are judged by their means.
 pub fn judge(before: &Tally, after: &Tally, z: f32, least: u32) -> Judgement {
     let enough = least.max(2);
     if before.n < enough || after.n < enough {
@@ -223,6 +226,12 @@ pub fn judge(before: &Tally, after: &Tally, z: f32, least: u32) -> Judgement {
     let (Some(a), Some(b), Some(va), Some(vb)) = (before.mean(), after.mean(), before.variance(), after.variance()) else {
         return Judgement::NoClearDifference;
     };
+    // Neither side's spread is taken for less than both sides' together: five successes in five
+    // do not make it sure of always succeeding. Under no difference at all, that is the spread to
+    // expect; so a few lucky outcomes with no spread among them cannot make a change look clear.
+    let both = Tally { n: before.n + after.n, sum: before.sum + after.sum, sum_sq: before.sum_sq + after.sum_sq };
+    let pooled = both.variance().unwrap_or(0.0);
+    let (va, vb) = (va.max(pooled), vb.max(pooled));
     let by = b - a;
     let error = (va / before.n as f32 + vb / after.n as f32).sqrt();
     let clear = if error > 1.0e-9 { by.abs() / error > z.max(0.0) } else { by.abs() > 1.0e-6 };
@@ -330,6 +339,25 @@ mod tests {
         }
         let rate = better as f32 / trials as f32;
         assert!(rate < 0.05, "judged better {rate:.3} of the time with no difference at all");
+    }
+
+    #[test]
+    fn a_few_lucky_outcomes_all_alike_are_not_taken_as_certain() {
+        // Five successes in five, then a long run at 64%: no clear decline - five is too few.
+        let (mut before, mut after) = (Tally::default(), Tally::default());
+        for _ in 0..5 {
+            before.add(1.0);
+        }
+        for n in 0..136 {
+            after.add(if n % 25 < 16 { 1.0 } else { 0.0 });
+        }
+        assert_eq!(judge(&before, &after, 1.96, 5), Judgement::NoClearDifference);
+        // Fifty in fifty would be another matter.
+        let mut many = Tally::default();
+        for _ in 0..50 {
+            many.add(1.0);
+        }
+        assert!(matches!(judge(&many, &after, 1.96, 5), Judgement::Worse { .. }));
     }
 
     #[test]

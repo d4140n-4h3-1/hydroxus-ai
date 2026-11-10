@@ -28,6 +28,20 @@
 //!
 //! One can tell another what it learned ([`Lessons::tell`]), who takes it as if it had happened
 //! to it, by the tuning's `told` share: a squad comes to think alike.
+//!
+//! **Settling.** The more it has to go on about something, the less each new outcome moves it: the
+//! first `free` outcomes count at the full `rate`, and each one after slows it by `settle`, down
+//! to `least_rate`. So a few at the start teach it fast, and once it knows what works, a run of
+//! bad luck does not talk it out of it - while `least_rate` still lets a world that has really
+//! changed change its mind. What it has to go on fades as what it makes of it does, halfway in
+//! the `half_life`: after a long while without, it learns fast again.
+//!
+//! **Trying the other way.** Settled, it would never again try what it once tried and was
+//! unlucky with, if what it does instead is only middling. So what it knows a lot about is weighed
+//! a little below what it knows little about - by up to the tuning's `explore` of its `sway`,
+//! the more the more it has to go on - and a well-tried way that only does middling lets the
+//! less-tried one have another go now and then. What it has never tried is weighed as nothing
+//! learned: 1. Nothing random: the same history, the same choice.
 
 use crate::tactics::utility::{Reasoner, Situation};
 
@@ -45,6 +59,13 @@ pub const SURE: f32 = 0.5;
 pub const CREDIT: f32 = 10.0;
 /// How many of the things it did lately a [`Trail`] keeps.
 pub const TRAIL: usize = 8;
+/// How many outcomes count at the full rate, how much each one after slows it, and how slow it
+/// gets at slowest.
+pub const FREE: f32 = 4.0;
+pub const SETTLE: f32 = 0.1;
+pub const LEAST_RATE: f32 = 0.05;
+/// How much less, of its `sway`, what it knows all about is weighed than what it knows nothing of.
+pub const EXPLORE: f32 = 0.3;
 
 tuning!(
     /// How an NPC learns what works (see the module's constants, its defaults).
@@ -61,6 +82,13 @@ tuning!(
         sure: f32 = SURE,
         /// How long, in seconds, after it gave something up an outcome counts half for it.
         credit: f32 = CREDIT,
+        /// How many outcomes count at the full rate, how much each one after slows it, and how
+        /// slow it gets at slowest.
+        free: f32 = FREE,
+        settle: f32 = SETTLE,
+        least_rate: f32 = LEAST_RATE,
+        /// How much less, of its sway, what it knows all about is weighed than what it does not.
+        explore: f32 = EXPLORE,
     }
 );
 
@@ -92,6 +120,10 @@ struct Learned<A> {
     action: A,
     worth: f32,
     view: Option<View>,
+    /// How much it has to go on: an outcome of its own, one; what it is told, or an outcome put
+    /// down to it in part, less. Fading as `worth` does.
+    #[cfg_attr(feature = "serde", serde(default))]
+    evidence: f32,
 }
 
 impl<A: Copy> Learned<A> {
@@ -154,7 +186,12 @@ impl<A: Copy + PartialEq> Lessons<A> {
     /// It did `action`, and it turned out `outcome`, from -1 (as badly as it could) to 1 (as
     /// well) - giving back whether it changed its mind about it for that.
     pub fn learn(&mut self, tuning: &Tuning, action: A, outcome: f32) -> Option<Verdict<A>> {
-        self.move_towards(tuning, action, outcome, tuning.rate)
+        self.move_towards(tuning, action, outcome, 1.0)
+    }
+
+    /// How much it has to go on about `action`: about how many outcomes of its own, lately.
+    pub fn evidence(&self, action: A) -> f32 {
+        self.learned.iter().find(|l| l.action == action).map_or(0.0, |l| l.evidence)
     }
 
     /// It tells `to` what it learned: each thing it makes anything of, taken as if it had turned
@@ -163,7 +200,7 @@ impl<A: Copy + PartialEq> Lessons<A> {
     pub fn tell(&self, tuning: &Tuning, to: &mut Lessons<A>) -> Vec<Verdict<A>> {
         self.learned
             .iter()
-            .filter_map(|l| to.move_towards(tuning, l.action, l.worth, tuning.rate * tuning.told))
+            .filter_map(|l| to.move_towards(tuning, l.action, l.worth, tuning.told))
             .collect()
     }
 
@@ -173,16 +210,25 @@ impl<A: Copy + PartialEq> Lessons<A> {
         let mut given_up = Vec::new();
         for learned in &mut self.learned {
             learned.worth = super::fade(learned.worth, tuning.half_life, dt);
+            learned.evidence = super::fade(learned.evidence, tuning.half_life, dt);
             given_up.extend(learned.settle(tuning.sure));
         }
-        self.learned.retain(|l| l.worth.abs() > 1.0e-3);
+        self.learned.retain(|l| l.worth.abs() > 1.0e-3 || l.evidence > 1.0e-2);
         given_up
     }
 
     /// How many times as much `action` scores, for what it learned of it: from one less the
-    /// tuning's sway, for what never works, to one and the sway, for what always does.
+    /// tuning's sway, for what never works, to one and the sway, for what always does - less up to
+    /// `explore` of the sway the better known it is (see the module's trying the other way). 1 for
+    /// what it has never tried.
     pub fn bias(&self, tuning: &Tuning, action: A) -> f32 {
-        (1.0 + tuning.sway * self.worth(action)).max(0.0)
+        // One look for it; never tried, nothing learned.
+        let Some(learned) = self.learned.iter().find(|l| l.action == action) else {
+            return 1.0;
+        };
+        // How well known it is: 0 never tried, toward 1 the more it has to go on.
+        let known = 1.0 - 1.0 / (1.0 + learned.evidence.max(0.0)).sqrt();
+        (1.0 + tuning.sway * (learned.worth - tuning.explore.max(0.0) * known)).max(0.0)
     }
 
     /// What `reasoner` chooses in `situation`, doing `current` already, with what it learned
@@ -204,19 +250,26 @@ impl<A: Copy + PartialEq> Lessons<A> {
         reasoner.choose_by(situation, current, |action| self.bias(tuning, action) * weigh(action).max(0.0))
     }
 
-    fn move_towards(&mut self, tuning: &Tuning, action: A, outcome: f32, rate: f32) -> Option<Verdict<A>> {
-        let (outcome, rate) = (outcome.clamp(-1.0, 1.0), rate.clamp(0.0, 1.0));
-        if outcome.is_nan() || rate.is_nan() || rate == 0.0 {
+    /// Moves what it makes of `action` toward `outcome`, the outcome counting `weight` of one of its
+    /// own (what it is told, or an outcome put down to it in part, less), at the tuning's rate as
+    /// slowed by what it has to go on already (see the module's settling).
+    fn move_towards(&mut self, tuning: &Tuning, action: A, outcome: f32, weight: f32) -> Option<Verdict<A>> {
+        let (outcome, weight) = (outcome.clamp(-1.0, 1.0), weight.clamp(0.0, 1.0));
+        let rate = tuning.rate.clamp(0.0, 1.0);
+        if outcome.is_nan() || weight.is_nan() || weight == 0.0 || rate == 0.0 {
             return None;
         }
         let learned = match self.learned.iter().position(|l| l.action == action) {
             Some(n) => &mut self.learned[n],
             None => {
-                self.learned.push(Learned { action, worth: 0.0, view: None });
+                self.learned.push(Learned { action, worth: 0.0, view: None, evidence: 0.0 });
                 self.learned.last_mut().unwrap()
             }
         };
-        learned.worth += (outcome - learned.worth) * rate;
+        let over = (learned.evidence - tuning.free).max(0.0);
+        let settled = (rate / (1.0 + tuning.settle.max(0.0) * over)).max(tuning.least_rate.clamp(0.0, rate));
+        learned.worth += (outcome - learned.worth) * settled * weight;
+        learned.evidence += weight;
         learned.settle(tuning.sure)
     }
 }
@@ -294,7 +347,7 @@ impl<A: Copy + PartialEq> Trail<A> {
             .did
             .iter()
             .filter(|&&(action, _)| down_to(action))
-            .filter_map(|&(action, since)| lessons.move_towards(tuning, action, outcome, tuning.rate * Self::credit(tuning, since)))
+            .filter_map(|&(action, since)| lessons.move_towards(tuning, action, outcome, Self::credit(tuning, since)))
             .collect();
         let current = self.current();
         self.did.retain(|&(a, _)| Some(a) == current || !down_to(a));
@@ -421,6 +474,79 @@ mod tests {
     }
 
     #[test]
+    fn well_learned_it_is_not_talked_out_of_it_by_a_run_of_bad_luck() {
+        // Thirty encounters of a way that works seven times in ten; then three failures in a row.
+        let mut lessons = Lessons::new();
+        for n in 0..30 {
+            lessons.learn(&T, Conduct::Search, if n % 10 < 7 { 1.0 } else { -0.5 });
+        }
+        let settled = lessons.worth(Conduct::Search);
+        for _ in 0..3 {
+            lessons.learn(&T, Conduct::Search, -0.5);
+        }
+        let after = lessons.worth(Conduct::Search);
+        assert!(after > 0.25, "still thought well of: {settled} -> {after}");
+        assert!(lessons.evidence(Conduct::Search) > 30.0);
+        // Not settled - the full rate every time - the same run would have taken it below a quarter.
+        let unsettled = Tuning { free: f32::INFINITY, ..T };
+        let mut raw = Lessons::new();
+        for n in 0..30 {
+            raw.learn(&unsettled, Conduct::Search, if n % 10 < 7 { 1.0 } else { -0.5 });
+        }
+        for _ in 0..3 {
+            raw.learn(&unsettled, Conduct::Search, -0.5);
+        }
+        assert!(raw.worth(Conduct::Search) < 0.25, "{}", raw.worth(Conduct::Search));
+    }
+
+    #[test]
+    fn settled_it_still_changes_its_mind_if_the_world_really_changes() {
+        let mut lessons = Lessons::new();
+        for _ in 0..60 {
+            lessons.learn(&T, Conduct::Search, 1.0);
+        }
+        assert_eq!(lessons.view(Conduct::Search), Some(View::Works));
+        // From now on it never works: in time it comes round, however settled.
+        let mut took = None;
+        for n in 0..200 {
+            lessons.learn(&T, Conduct::Search, -1.0);
+            if lessons.view(Conduct::Search) == Some(View::Fails) {
+                took = Some(n + 1);
+                break;
+            }
+        }
+        let took = took.expect("it came round");
+        assert!(took <= 60, "{took} failures to come round");
+        // Fewer once a while has passed without: what it has to go on fades.
+        let mut rested = Lessons::new();
+        for _ in 0..60 {
+            rested.learn(&T, Conduct::Search, 1.0);
+        }
+        rested.step(&T, HALF_LIFE * 3.0);
+        let mut sooner = 0;
+        while rested.worth(Conduct::Search) > -SURE {
+            rested.learn(&T, Conduct::Search, -1.0);
+            sooner += 1;
+        }
+        assert!(sooner < took, "{sooner} against {took}");
+    }
+
+    #[test]
+    fn a_well_known_middling_way_lets_a_less_tried_one_have_another_go() {
+        let mut lessons = Lessons::new();
+        for n in 0..30 {
+            lessons.learn(&T, Conduct::Investigate, if n % 10 < 3 { 1.0 } else { -0.5 });
+        }
+        // Middling, and well known: weighed below one it knows nothing of.
+        assert!(lessons.worth(Conduct::Investigate).abs() < 0.2);
+        assert!(lessons.bias(&T, Conduct::Investigate) < lessons.bias(&T, Conduct::Search));
+        assert_eq!(lessons.bias(&T, Conduct::Search), 1.0, "never tried: nothing learned");
+        // Switched off, nothing of the kind.
+        let off = Tuning { sway: 0.0, ..T };
+        assert_eq!(lessons.bias(&off, Conduct::Investigate), 1.0);
+    }
+
+    #[test]
     fn what_it_is_told_counts_but_less_than_what_happened_to_it() {
         let mut veteran = Lessons::new();
         for _ in 0..8 {
@@ -449,6 +575,9 @@ mod tests {
         let mut lessons = Lessons::new();
         lessons.learn(&T, Do::Shout, -1.0);
         assert_eq!(lessons.choose(&T, &mut r, &Nothing, None), Some(Do::Shoot));
-        assert!((r.scores[0].1 - (1.0 - SWAY * RATE)).abs() < 1.0e-6);
+        assert!((r.scores[0].1 - lessons.bias(&T, Do::Shout)).abs() < 1.0e-6);
+        // One failure: worth -RATE, and a little more for being known now.
+        let known = 1.0 - 1.0 / 2.0f32.sqrt();
+        assert!((lessons.bias(&T, Do::Shout) - (1.0 - SWAY * (RATE + EXPLORE * known))).abs() < 1.0e-6);
     }
 }

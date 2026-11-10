@@ -49,6 +49,11 @@ fn found(rng: &mut Rng, chance: f32) -> bool {
 /// noticed finds the player with chance `look` and keeping to the search with chance `search`.
 /// Each sentry's evaluation, and each encounter's outcome (1 found, 0 not) for every sentry.
 fn run(tuning: &Tuning, look: f32, search: f32, seed: u64) -> (Vec<Evaluation<Conduct>>, Vec<Vec<f32>>) {
+    run_for(tuning, |_| (look, search), ENCOUNTERS, seed)
+}
+
+/// As `run`, for `encounters`, the world's chances in each encounter `world(n)`: (look, search).
+fn run_for(tuning: &Tuning, world: impl Fn(usize) -> (f32, f32), encounters: usize, seed: u64) -> (Vec<Evaluation<Conduct>>, Vec<Vec<f32>>) {
     let mut rng = Rng::new(seed);
     let mut reasoners = Reasoners::default();
     let mut evaluations = Vec::new();
@@ -57,7 +62,8 @@ fn run(tuning: &Tuning, look: f32, search: f32, seed: u64) -> (Vec<Evaluation<Co
         let mut experience = Experience::<()>::new();
         let mut evaluation = Evaluation::new();
         let mut mine = Vec::new();
-        for _ in 0..ENCOUNTERS {
+        for n in 0..encounters {
+            let (look, search) = world(n);
             let conduct = experience.choose(tuning, &mut reasoners, Role::Sentry, &CHOICE, None);
             let (venture, chance) = match conduct {
                 Conduct::Investigate => (Venture::Investigation, look),
@@ -138,27 +144,32 @@ fn one_way_better(seed: u64) -> (Vec<f32>, Vec<f32>) {
     // a while before it relearns. Hence the group, not each one, is held to always improving.
     let mut better = 0;
     let (mut on_search, mut changes, mut searches) = (0, 0.0, 0);
+    let mut worst = 1.0f32;
     for e in &learners {
         let (searched, looked) = (e.tally(Conduct::Search).n, e.tally(Conduct::Investigate).n);
-        // Even the unluckiest searched at least as often as it looked.
-        assert!(searched >= looked, "searched {searched}, looked {looked}");
+        worst = worst.min(searched as f32 / (searched + looked) as f32);
         searches += searched;
         on_search += usize::from(e.habit() == Some(Conduct::Search));
         changes += e.stability();
         for a in e.adaptations() {
             match e.judge(a, 1.96, 5) {
                 Judgement::Better { .. } if a.to == Conduct::Search => better += 1,
-                Judgement::Worse { .. } if a.to == Conduct::Search => panic!("taking to searching judged worse: {a:?}"),
+                Judgement::Worse { .. } if a.to == Conduct::Search => panic!("seed {seed}: taking to searching judged worse: {a:?}"),
                 _ => (),
             }
         }
     }
     let changes = changes / SENTRIES as f32;
     println!("seed {seed}: {on_search} of {SENTRIES} search as a rule at the end; {changes:.2} changes of habit per hundred encounters; {better} changes to searching judged better on their own");
-    assert!(on_search >= 15, "{on_search} of {SENTRIES} search as a rule at the end");
-    assert!(changes <= 2.5, "{changes} changes of habit per hundred encounters");
+    // Settled on what works, and seldom talked out of it by a run of bad luck (ROADMAP 4.3) - in
+    // 4.2's measurements, before settling and trying the other way, these were 15 of 20, 1.7 changes
+    // a hundred, 0.83 in all and 0.51 for the least of any one.
+    assert!(on_search >= 18, "{on_search} of {SENTRIES} search as a rule at the end");
+    assert!(changes <= 1.5, "{changes} changes of habit per hundred encounters");
+    assert!(worst >= 0.6, "one searched only {worst:.2} of the time");
     let share = searches as f32 / (SENTRIES * ENCOUNTERS) as f32;
-    assert!(share >= 0.8, "searched {share:.2} of the time in all");
+    println!("seed {seed}: searched {share:.2} of the time in all, the least of any one {worst:.2}");
+    assert!(share >= 0.85, "searched {share:.2} of the time in all");
     // Some took to searching after only a handful of looks - too few to judge each change on its
     // own - which is why the groups are judged together above.
     assert!(better > 0);
@@ -191,4 +202,30 @@ fn where_neither_way_works_better_no_improvement_is_claimed() {
     let rate = claimed as f32 / adaptations as f32;
     println!("no difference to find: {adaptations} changes of habit, {claimed} judged better ({:.1}%)", rate * 100.0);
     assert!(rate <= 0.10, "{claimed} of {adaptations} changes judged better where nothing was");
+}
+
+#[test]
+fn when_the_world_changes_settled_learners_still_change_their_minds() {
+    // 150 encounters where searching works (70%) and looking does not (30%); then 150 where it is
+    // the other way round. Settled on searching, they must not stay settled on it.
+    let swapped = |n: usize| if n < 150 { (0.3, 0.7) } else { (0.7, 0.3) };
+    for seed in [3, 8, 34] {
+        let (learners, learned) = run_for(&AI, swapped, 300, seed);
+        let mut turned = Vec::new();
+        for e in &learners {
+            assert_eq!(e.habit(), Some(Conduct::Investigate), "seed {seed}: it came round to looking");
+            let back = e.adaptations().iter().filter(|a| a.at > 150 && a.to == Conduct::Investigate).map(|a| a.at - 150).next();
+            // One already looking as a rule when the world changed has nothing to come round from.
+            turned.push(back.unwrap_or(0));
+        }
+        turned.sort_unstable();
+        let median = turned[turned.len() / 2];
+        // Just after the change, before they could have learned it - five encounters each.
+        let before = pooled(&learned, 150..155);
+        let after = pooled(&learned, 250..300);
+        println!("seed {seed}: came round to looking a median {median} encounters after the change (all: {turned:?}); found them {:.2} just after, {:.2} at the end", before.mean().unwrap(), after.mean().unwrap());
+        assert!(median <= 40, "seed {seed}: a median {median} encounters to come round");
+        assert!(matches!(judge(&before, &after, 1.96, 10), Judgement::Better { by } if by > 0.15), "seed {seed}");
+        assert!(after.mean().unwrap() >= 0.6, "seed {seed}: near the 0.7 there is to be had");
+    }
 }

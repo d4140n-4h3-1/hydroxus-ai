@@ -466,6 +466,9 @@ impl Tuning {
         c.within("lesson.sure", l.sure, 0.0, 1.0);
         c.positive("lesson.sure", l.sure);
         c.positive("lesson.credit", l.credit);
+        c.fraction("lesson.least_rate", l.least_rate);
+        c.at_most("lesson.least_rate", l.least_rate, "lesson.rate", l.rate);
+        c.fraction("lesson.explore", l.explore);
 
         let h = &self.habit;
         c.positive("habit.half_life", h.half_life);

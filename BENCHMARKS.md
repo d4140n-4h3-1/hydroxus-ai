@@ -170,6 +170,18 @@ alternately, three times each, 250 sentries: before 0.1778–0.1780 ms a frame, 
 0.1590–0.1773 ms. No regression. The same before-build measured 0.159 ms earlier in the day, so
 the machine itself varies by about 10% across a session; only side-by-side runs are comparable.
 
+## Controlled learning (2026-11-10, milestone 4.3)
+
+`cargo run --release --example learning`, one way better, learners against control: before 4.3,
+last fifty better by 0.36, lowest block 0.59, 17 of 20 ending on what works; after, by 0.41,
+lowest block 0.63, 20 of 20. The null world: 69 changes of habit, 2 judged better; after, 40 and 0.
+
+The squads, built from 0ec6a3b (before) and this milestone (after), run alternately: the first
+version of the exploring bias - looking an action up twice and taking a square root, for each of
+14 conducts, for each sentry, each frame - cost about 10% (0.189 ms against 0.164-0.177 ms at
+250). One look-up, and 1 at once for what was never tried: four alternating runs, before
+0.159-0.178 ms, after 0.158-0.177 ms.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide
