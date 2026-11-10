@@ -61,6 +61,8 @@ struct World {
     t: f32,
     log: Vec<(f32, usize, Happened)>,
     intents: Vec<Intent>,
+    /// The tuning it runs by: `AI`, unless a test changes it.
+    ai: Tuning,
 }
 
 impl World {
@@ -81,6 +83,7 @@ impl World {
             t: 0.0,
             log: Vec::new(),
             intents: Vec::new(),
+            ai: AI,
         }
     }
 
@@ -132,7 +135,7 @@ impl World {
             .collect();
         let feet: Vec<V> = self.bodies.iter().map(|b| b.feet).collect();
         let mesh = &self.mesh;
-        let thoughts = self.squad.step(&AI, mesh, &mut self.reasoners, &mut self.sentries, &senses, false, |a, b| mesh.sees_across(feet[a], feet[b]), dt);
+        let thoughts = self.squad.step(&self.ai, mesh, &mut self.reasoners, &mut self.sentries, &senses, false, |a, b| mesh.sees_across(feet[a], feet[b]), dt);
         self.intents.clear();
         // Act: the game carries out each intent.
         for (i, thought) in thoughts.into_iter().enumerate() {
@@ -152,8 +155,8 @@ impl World {
                     if body.to.is_none_or(|to| flat(to - at).norm() > 0.5) || body.route.is_empty() {
                         body.route = route_to(&self.mesh, body.feet, at, f32::INFINITY);
                         body.to = Some(at);
-                        if body.route.is_empty() && flat(at - body.feet).norm() > AI.orchestrate.arrived {
-                            self.sentries[i].no_way(&AI);
+                        if body.route.is_empty() && flat(at - body.feet).norm() > self.ai.orchestrate.arrived {
+                            self.sentries[i].no_way(&self.ai);
                         }
                     }
                     let speed = match pace {
@@ -323,8 +326,16 @@ fn a_fresh_search_is_kept_to_over_a_faint_noise_but_a_cold_one_is_left_for_a_cle
     cold.run(lost + 25.0 - cold.t, 1.0 / 60.0);
     assert_eq!(cold.sentries[0].alert(), Some(Alert::Evasion), "still searching");
     cold.sentries[0].hear(&AI, at(14.0, 2.0), 0.9);
-    cold.run(1.0, 1.0 / 60.0);
-    assert_eq!(cold.sentries[0].conduct(), Some(Conduct::Investigate), "{:?}", cold.sentries[0].context(&AI));
+    // Once it has finished the spot it is searching, it goes to look.
+    assert!(goes_to_look(&mut cold, 0, 6.0), "{:?}", cold.sentries[0].context(&AI));
+}
+
+/// Whether sentry `s` goes to look into what it noticed in the next `seconds`.
+fn goes_to_look(world: &mut World, s: usize, seconds: f32) -> bool {
+    (0..(seconds * 60.0) as usize).any(|_| {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        world.sentries[s].conduct() == Some(Conduct::Investigate)
+    })
 }
 
 #[test]
@@ -336,9 +347,14 @@ fn the_curious_follow_a_new_lead_where_the_incurious_keep_to_the_search() {
     for s in 0..2 {
         world.sentries[s].hear(&AI, at(14.0, 2.0), 0.7);
     }
-    world.run(1.0, 1.0 / 60.0);
-    assert_eq!(world.sentries[0].conduct(), Some(Conduct::Investigate));
-    assert_eq!(world.sentries[1].conduct(), Some(Conduct::Search));
+    let mut incurious = world.sentries[1].conduct() == Some(Conduct::Investigate);
+    let mut curious = false;
+    for _ in 0..(6 * 60) {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        curious |= world.sentries[0].conduct() == Some(Conduct::Investigate);
+        incurious |= world.sentries[1].conduct() == Some(Conduct::Investigate);
+    }
+    assert!(curious && !incurious, "curious {curious}, incurious {incurious}");
 }
 
 #[test]
@@ -391,6 +407,9 @@ fn with_no_way_to_where_it_noticed_something_it_gives_the_look_up() {
     world.run(0.5, 1.0 / 60.0);
     assert!(world.first(0, Happened::Noticed).is_some());
     assert!(world.first(0, Happened::InvestigationDone).is_some(), "{:?}", world.log);
+    // Attentive, it stands looking that way a moment, and then goes back to its routine.
+    assert!(world.sentries[0].attentive() && matches!(world.intents[0], Intent::Face { .. }));
+    world.run(AI.orchestrate.linger, 1.0 / 60.0);
     assert_eq!(world.intents[0], Intent::Routine);
 }
 
@@ -487,4 +506,159 @@ fn the_modules_do_not_depend_on_the_orchestration_layer() {
     }
     users.sort();
     assert_eq!(users, vec!["lib.rs", "orchestrate.rs", "validate.rs"]);
+}
+
+
+// Persistence (ROADMAP 2.3).
+
+/// Where sentry 0 is going to look, if it is investigating.
+fn looking_into(world: &World) -> Option<V> {
+    world.sentries[0].investigating().filter(|_| world.sentries[0].conduct() == Some(Conduct::Investigate))
+}
+
+/// Runs `world` on `seconds`, giving back each spot sentry 0 went to look into, in order, and how
+/// near it got to each.
+fn spots_looked_into(world: &mut World, seconds: f32) -> Vec<(V, f32)> {
+    let mut spots: Vec<(V, f32)> = Vec::new();
+    for _ in 0..(seconds * 60.0) as usize {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        if let Some(spot) = looking_into(world) {
+            if spots.last().is_none_or(|&(last, _)| flat(last - spot).norm() > 0.5) {
+                spots.push((spot, f32::MAX));
+            }
+        }
+        if let Some((spot, closest)) = spots.last_mut() {
+            *closest = closest.min(flat(*spot - world.bodies[0].feet).norm());
+        }
+    }
+    spots
+}
+
+#[test]
+fn it_finishes_looking_where_it_nearly_is_before_a_second_noise_and_then_looks_there_too() {
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    let (first, second) = (at(15.0, 2.0), at(2.0, 2.0));
+    world.sentries[0].hear(&AI, first, 0.8);
+    // Nearly there, another noise as loud, the other way.
+    while looking_into(&world).is_none_or(|_| flat(first - world.bodies[0].feet).norm() > AI.orchestrate.finish_within) {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        assert!(world.t < 20.0);
+    }
+    world.sentries[0].hear(&AI, second, 0.8);
+    let spots = spots_looked_into(&mut world, 40.0);
+    let near = |(spot, closest): (V, f32), to: V| flat(spot - to).norm() < 0.5 && closest < AI.investigate.reach + 0.5;
+    assert!(spots.len() == 2 && near(spots[0], first) && near(spots[1], second), "{spots:?}");
+    let done: Vec<f32> = world.log.iter().filter(|&&(_, _, h)| h == Happened::InvestigationDone).map(|&(t, _, _)| t).collect();
+    assert_eq!(done.len(), 2, "both looked into to the end: {:?}", world.log);
+}
+
+#[test]
+fn a_clearly_surer_lead_takes_over_one_just_set_off_for_and_a_lesser_one_waits_its_turn() {
+    // Just set off for a faint noise far off; a loud one close by: that first, then the faint one.
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    let (faint, loud) = (at(20.0, 2.0), at(4.0, 2.0));
+    world.sentries[0].hear(&AI, faint, 0.45);
+    world.run(1.2, 1.0 / 60.0);
+    assert_eq!(looking_into(&world), Some(faint));
+    world.sentries[0].hear(&AI, loud, 0.9);
+    let spots = spots_looked_into(&mut world, 40.0);
+    assert!(spots.len() >= 2 && flat(spots[0].0 - loud).norm() < 0.5 && flat(spots[1].0 - faint).norm() < 0.5, "{spots:?}");
+
+    // A loud noise, then one not clearly surer: it keeps to the first, the second waiting.
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    world.sentries[0].hear(&AI, loud, 0.8);
+    world.run(1.2, 1.0 / 60.0);
+    world.sentries[0].hear(&AI, faint, 0.9);
+    let spots = spots_looked_into(&mut world, 40.0);
+    assert!(spots.len() >= 2 && flat(spots[0].0 - loud).norm() < 0.5 && flat(spots[1].0 - faint).norm() < 0.5, "{spots:?}");
+}
+
+#[test]
+fn a_noise_too_faint_to_look_into_has_it_look_that_way_and_listen_the_keener_a_while() {
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    world.sentries[0].hear(&AI, at(2.0, 2.0), 0.2);
+    world.run(0.5, 1.0 / 60.0);
+    assert!(world.first(0, Happened::Noticed).is_none(), "not enough to go and look");
+    assert!(world.sentries[0].attentive());
+    // It turns to look behind it, where it heard it, and then back to its routine.
+    assert!(matches!(world.intents[0], Intent::Face { heading } if (heading - WEST).abs() < 0.1), "{:?}", world.intents[0]);
+    world.run(AI.orchestrate.linger, 1.0 / 60.0);
+    assert_eq!(world.intents[0], Intent::Routine);
+    world.run(AI.orchestrate.attentive_for, 1.0 / 60.0);
+    assert!(!world.sentries[0].attentive(), "for a while, not for ever");
+}
+
+#[test]
+fn attentive_it_makes_out_someone_sooner() {
+    // Two sentries, each facing east down the corridor; one has just heard something faint
+    // ahead. Once what it heard has drained from its awareness, someone steps out at the far end.
+    let noticed = |heard: bool| {
+        let mut world = World::new(&[(at(4.0, 2.0), EAST)], GONE);
+        if heard {
+            world.sentries[0].hear(&AI, at(12.0, 2.0), 0.2);
+        }
+        world.run(3.0, 1.0 / 60.0);
+        assert!(world.sentries[0].detection.level < 1.0e-3);
+        assert_eq!(world.sentries[0].attentive(), heard);
+        world.player = at(31.0, 2.0);
+        let from = world.t;
+        world.run(4.0, 1.0 / 60.0);
+        world.first(0, Happened::Noticed).map(|t| t - from)
+    };
+    let (keen, plain) = (noticed(true).expect("noticed"), noticed(false).expect("noticed"));
+    assert!(keen < plain * 0.8, "attentive {keen:.2} s, not {plain:.2} s");
+}
+
+#[test]
+fn a_storm_of_noises_does_not_scatter_it() {
+    // Twenty noises about the corridor in twelve seconds, loud and faint, while it investigates.
+    let mut world = World::new(&[(at(20.0, 2.0), EAST)], GONE);
+    let mut seed = 7u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let mut target: Option<V> = None;
+    let mut switches = 0;
+    for frame in 0..(60 * 60) {
+        if frame % 36 == 0 && frame < 12 * 60 {
+            let (x, loud) = (2.0 + next() * 36.0, 0.2 + next() * 0.8);
+            world.sentries[0].hear(&AI, at(x, 2.0), loud);
+        }
+        let done_before = world.log.iter().filter(|&&(_, _, h)| h == Happened::InvestigationDone).count();
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        let finished = world.log.iter().filter(|&&(_, _, h)| h == Happened::InvestigationDone).count() > done_before;
+        let now = looking_into(&world);
+        if let (Some(was), Some(now)) = (target, now) {
+            if flat(was - now).norm() > 0.5 {
+                let near = flat(was - world.bodies[0].feet).norm() <= AI.orchestrate.finish_within;
+                assert!(finished || !near, "turned from a look it was {:.1} m from finishing", flat(was - world.bodies[0].feet).norm());
+                switches += 1;
+            }
+        }
+        // A look finished is no longer one to turn from.
+        target = if finished { now } else { now.or(target) };
+    }
+    let done = world.log.iter().filter(|&&(_, _, h)| h == Happened::InvestigationDone).count();
+    assert!(done >= 3, "it finished looking into some: {done}");
+    assert!(switches <= done + 3, "{switches} changes of where to look, {done} looks finished");
+    assert_eq!(world.intents[0], Intent::Routine, "and in the end, back to its routine");
+}
+
+#[test]
+fn persistence_can_be_switched_off() {
+    // With nothing held, a second noise as loud takes over at once, near the first spot or not.
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], GONE);
+    world.ai.orchestrate.hold = 0.0;
+    world.ai.orchestrate.finish_within = 0.0;
+    world.ai.orchestrate.switch_lead_by = 0.0;
+    let (first, second) = (at(15.0, 2.0), at(2.0, 2.0));
+    world.sentries[0].hear(&world.ai.clone(), first, 0.8);
+    while looking_into(&world).is_none_or(|_| flat(first - world.bodies[0].feet).norm() > 4.0) {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+    }
+    world.sentries[0].hear(&world.ai.clone(), second, 0.8);
+    world.run(0.2, 1.0 / 60.0);
+    assert_eq!(looking_into(&world), Some(second));
+    assert!(world.first(0, Happened::InvestigationDone).is_none(), "the first given up unfinished");
 }

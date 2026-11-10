@@ -72,6 +72,22 @@ pub const TOLD: f32 = 0.6;
 /// How sure of a lead it has passed over, at least, for it to keep it in mind: under this, it lets
 /// it go, rather than look into a noise long after.
 pub const LEAD_FORGOTTEN: f32 = 0.05;
+/// Persistence: how much more what it is in the middle of counts - an investigation within
+/// [`FINISH_WITHIN`] of its spot, a search spot it is looking about - on top of
+/// whatever else weighs it: twice as much.
+pub const HOLD: f32 = 1.0;
+/// How near the spot it is investigating it finishes it before anything new but a sighting, in
+/// meters.
+pub const FINISH_WITHIN: f32 = 4.0;
+/// How much surer than the lead it is following a new one has to be to take its place, rather than
+/// wait its turn.
+pub const SWITCH_LEAD_BY: f32 = 0.25;
+/// After a disturbance that came to nothing - a look that found nothing, a noise too faint to look
+/// into - how long it stays attentive, in seconds; how many times as keenly it looks and listens
+/// meanwhile; and how long of that it stands looking that way first.
+pub const ATTENTIVE_FOR: f32 = 8.0;
+pub const ATTENTIVE_KEENNESS: f32 = 1.5;
+pub const LINGER: f32 = 1.5;
 
 tuning!(
     /// How the orchestration layer runs the modules together (see the module's constants).
@@ -93,6 +109,17 @@ tuning!(
         lead_half_life: f32 = LEAD_HALF_LIFE,
         /// How sure it is of where it is told the player is, from 0 to 1.
         told: f32 = TOLD,
+        /// How much more what it is in the middle of counts.
+        hold: f32 = HOLD,
+        /// How near its spot an investigation or a search spot is finished before anything new.
+        finish_within: f32 = FINISH_WITHIN,
+        /// How much surer a new lead has to be to take the place of the one it is following.
+        switch_lead_by: f32 = SWITCH_LEAD_BY,
+        /// How long it stays attentive after a disturbance that came to nothing, how much more
+        /// keenly, and how long of it it stands looking that way first.
+        attentive_for: f32 = ATTENTIVE_FOR,
+        attentive_keenness: f32 = ATTENTIVE_KEENNESS,
+        linger: f32 = LINGER,
     }
 );
 
@@ -193,6 +220,9 @@ pub struct Sentry {
     left: f32,
     investigation: Option<Investigation>,
     look: Option<LookAbout>,
+    /// Whether it is looking about a spot it went to search - something to finish - rather than
+    /// looking about where it is for want of anywhere likelier.
+    at_spot: bool,
     /// Where it is going, searching or walking its beat.
     goal: Option<Vector3<f32>>,
     beat: Vec<Vector3<f32>>,
@@ -205,6 +235,11 @@ pub struct Sentry {
     sighting: (f32, f32),
     lead: (f32, f32),
     threat: f32,
+    /// A lead waiting its turn: where, how sure it was, and how long ago.
+    pending: Option<(Vector3<f32>, f32, f32)>,
+    /// Attentive after a disturbance: how long it has left, toward where, and how long it has
+    /// stood looking that way.
+    attentive: Option<(f32, Vector3<f32>, f32)>,
     /// Where it last saw the player, and which way they were going.
     last_seen: Option<Vector3<f32>>,
     going: Vector3<f32>,
@@ -228,6 +263,7 @@ impl Sentry {
             left: 0.0,
             investigation: None,
             look: None,
+            at_spot: false,
             goal: None,
             beat: Vec::new(),
             post: 0,
@@ -236,6 +272,8 @@ impl Sentry {
             sighting: (0.0, 0.0),
             lead: (0.0, 0.0),
             threat: 0.0,
+            pending: None,
+            attentive: None,
             last_seen: None,
             going: Vector3::zeros(),
             told: None,
@@ -321,23 +359,80 @@ impl Sentry {
         let eagerness = self.eagerness(tuning);
         self.wariness.note(&tuning.alert, Incident::Heard);
         let noticed = self.detection.hear(&tuning.detection, nearness, eagerness) == Some(Change::Noticed);
+        let nearness = unit(nearness);
         match self.alert {
-            None if noticed => (),
+            None if noticed || self.investigation.is_some() && nearness > 0.0 => (),
             Some(Alert::Evasion | Alert::Caution) if nearness > 0.0 => (),
+            // Too faint to look into: it is attentive that way a while.
+            None if nearness > 0.0 => {
+                self.attentive = Some((tuning.orchestrate.attentive_for, at, 0.0));
+                return;
+            }
             _ => return,
         }
-        if self.investigation.is_none() || nearness >= self.lead.0 {
-            self.investigation = Some(Investigation::new(&tuning.investigate, at));
-            self.lead = (unit(nearness), 0.0);
-            self.happened.push(Happened::Noticed);
+        let o = &tuning.orchestrate;
+        let following = self.investigation.map(|_| self.lead.0 * 0.5f32.powf(self.lead.1 / o.lead_half_life.max(1.0e-3)));
+        match following {
+            // Nothing on: it goes to look.
+            None => self.follow(tuning, at, nearness),
+            // Clearly surer than what it is following, and not about to finish that: this first.
+            Some(now) if !self.finishing_within(o.finish_within) && nearness >= now + o.switch_lead_by => {
+                let was = self.investigation.map(|look| (look.at, now, 0.0));
+                self.follow(tuning, at, nearness);
+                self.wait(was);
+            }
+            // Otherwise it waits its turn.
+            Some(_) => self.wait(Some((at, nearness, 0.0))),
         }
+    }
+
+    /// It goes to look at `at`, as sure of it as `sure`.
+    fn follow(&mut self, tuning: &crate::Tuning, at: Vector3<f32>, sure: f32) {
+        self.investigation = Some(Investigation::new(&tuning.investigate, at));
+        self.lead = (sure, 0.0);
+        self.attentive = None;
+        self.happened.push(Happened::Noticed);
+    }
+
+    /// `lead` waits its turn, if it is the surer of it and the one waiting already.
+    fn wait(&mut self, lead: Option<(Vector3<f32>, f32, f32)>) {
+        let sure = |(_, sure, _): (Vector3<f32>, f32, f32)| sure;
+        if let Some(lead) = lead.filter(|&l| self.pending.is_none_or(|p| sure(l) >= sure(p))) {
+            self.pending = Some(lead);
+        }
+    }
+
+    /// Whether it is in the middle of something it should finish first: an investigation it is
+    /// within `finish_within` of the spot of, or a search spot it is looking about.
+    fn finishing_within(&self, finish_within: f32) -> bool {
+        let near = |at: Vector3<f32>| flat(at - self.feet).norm() <= finish_within;
+        match self.conduct {
+            Some(Conduct::Investigate) => self.investigation.is_some_and(|look| near(look.at)),
+            // A search is one spot after another: what it finishes is looking about the one it is
+            // at, not every walk to the next - or, on a small level, it would never be free.
+            Some(Conduct::Search) => self.at_spot && self.look.is_some_and(|look| !look.done()),
+            _ => false,
+        }
+    }
+
+    /// Where it is going to look, or looking, into something it noticed, if anywhere.
+    pub fn investigating(&self) -> Option<Vector3<f32>> {
+        self.investigation.map(|look| look.at)
+    }
+
+    /// Whether it is attentive after a disturbance.
+    pub fn attentive(&self) -> bool {
+        self.attentive.is_some()
     }
 
     /// There is no way to where it was going: it gives it up - an investigation, as if done; a
     /// search spot, for another; a post of its beat, for the next.
     pub fn no_way(&mut self, tuning: &crate::Tuning) {
         match self.conduct {
-            Some(Conduct::Investigate) if self.investigation.take().is_some() => self.investigation_done(tuning),
+            Some(Conduct::Investigate) if self.investigation.is_some() => {
+                let spot = self.investigation.map(|look| look.at);
+                self.investigation_done(tuning, spot);
+            }
             _ if !self.beat.is_empty() && self.goal.is_some() && self.alert.is_none() => {
                 self.post = (self.post + 1) % self.beat.len();
                 self.goal = None;
@@ -348,13 +443,22 @@ impl Sentry {
 
     fn eagerness(&self, tuning: &crate::Tuning) -> f32 {
         let searching = if self.alert == Some(Alert::Evasion) { tuning.detection.searching } else { 1.0 };
-        self.wariness.keenness(&tuning.alert) * searching
+        let attentive = if self.attentive.is_some() { tuning.orchestrate.attentive_keenness.max(0.0) } else { 1.0 };
+        self.wariness.keenness(&tuning.alert) * searching * attentive
     }
 
-    fn investigation_done(&mut self, tuning: &crate::Tuning) {
+    /// It looked at `spot`, and found nothing: it stays attentive that way a while, and takes up
+    /// the lead that was waiting, if it has not gone cold.
+    fn investigation_done(&mut self, tuning: &crate::Tuning, spot: Option<Vector3<f32>>) {
         self.investigation = None;
         self.happened.push(Happened::InvestigationDone);
         self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Investigation));
+        let o = &tuning.orchestrate;
+        let left = self.pending.take().map(|(at, sure, since)| (at, sure * 0.5f32.powf(since / o.lead_half_life.max(1.0e-3))));
+        match left.filter(|&(_, sure)| sure >= LEAD_FORGOTTEN) {
+            Some((at, sure)) => self.follow(tuning, at, sure),
+            None => self.attentive = spot.map(|spot| (o.attentive_for, spot, 0.0)),
+        }
     }
 
     fn lost_at(&mut self, tuning: &crate::Tuning, search: &mut SearchMap, mesh: &NavMesh, at: Vector3<f32>, going: Option<Vector3<f32>>) {
@@ -379,6 +483,13 @@ impl Sentry {
         self.threat = unit(senses.threat);
         self.sighting.1 += dt;
         self.lead.1 += dt;
+        if let Some((_, _, since)) = self.pending.as_mut() {
+            *since += dt;
+        }
+        if let Some((left, _, _)) = self.attentive.as_mut() {
+            *left -= dt;
+        }
+        self.attentive = self.attentive.filter(|&(left, _, _)| left > 0.0);
         let visible = if senses.visible.is_finite() && player_known { senses.visible.max(0.0) } else { 0.0 };
         self.wariness.step(&tuning.alert, dt);
         let eagerness = self.eagerness(tuning);
@@ -398,6 +509,8 @@ impl Sentry {
                 self.happened.push(Happened::Spotted);
                 self.wariness.note(&tuning.alert, Incident::Spotted);
                 self.investigation = None;
+                self.pending = None;
+                self.attentive = None;
                 self.alert = Some(Alert::Alert);
                 self.goal = None;
                 self.look = None;
@@ -497,8 +610,12 @@ impl Sentry {
         };
         let context = self.context(tuning);
         let traits = self.traits;
+        // Persistence: what it is in the middle of counts the more, so that it finishes it before
+        // anything new but what shuts it (a sighting) or clearly outweighs it.
+        let finishing = self.finishing_within(t.finish_within).then_some(self.conduct).flatten();
+        let hold = 1.0 + t.hold.max(0.0);
         let conduct = self.experience.choose_with(tuning, reasoners, self.role, &reading, self.conduct, |c| {
-            priority::weigh(&tuning.priority, &traits, &context, c)
+            priority::weigh(&tuning.priority, &traits, &context, c) * if finishing == Some(c) { hold } else { 1.0 }
         });
         if self.conduct != Some(conduct) {
             self.goal = None;
@@ -526,7 +643,7 @@ impl Sentry {
                         Intent::GoTo { at, pace: Pace::Walk }
                     }
                     Doing::Done => {
-                        self.investigation_done(tuning);
+                        self.investigation_done(tuning, Some(look.at));
                         Intent::Face { heading: self.heading }
                     }
                 },
@@ -541,6 +658,7 @@ impl Sentry {
                         // Got there: it looks about.
                         self.goal = None;
                         self.look = Some(LookAbout::searching(&tuning.search, self.heading));
+                        self.at_spot = true;
                         Intent::Face { heading: self.heading }
                     } else {
                         if self.goal.is_none() {
@@ -551,11 +669,18 @@ impl Sentry {
                             // Nowhere likelier than where it is: it looks about here.
                             None => {
                                 self.look = Some(LookAbout::searching(&tuning.search, self.heading));
+                                self.at_spot = false;
                                 Intent::Face { heading: self.heading }
                             }
                         }
                     }
                 }
+            }
+            // Attentive after a disturbance: first it stands looking that way a moment.
+            _ if self.attentive.is_some_and(|(_, _, stood)| stood < t.linger) => {
+                let (left, toward, stood) = self.attentive.expect("attentive");
+                self.attentive = Some((left, toward, stood + dt));
+                Intent::Face { heading: crate::heading_of(toward - self.feet).unwrap_or(self.heading) }
             }
             _ if self.beat.is_empty() => Intent::Routine,
             _ => {

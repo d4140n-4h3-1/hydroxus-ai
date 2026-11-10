@@ -484,6 +484,7 @@ impl Tuning {
         c.positive("orchestrate.sighting_half_life", o.sighting_half_life);
         c.positive("orchestrate.lead_half_life", o.lead_half_life);
         c.fraction("orchestrate.told", o.told);
+        c.fraction("orchestrate.switch_lead_by", o.switch_lead_by);
 
         let p = &self.priority;
         c.positive("priority.committed_after", p.committed_after);

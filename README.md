@@ -107,7 +107,7 @@ up to search). Each frame the game hands `Squad::step` what each sentry senses (
 how visible the player is), and gets back for each an `Intent` (its routine, go somewhere at a
 pace, or face a way) and what happened (`Spotted`, `LostContact`, `GaveUp`, ...). The game still
 casts the rays, routes and moves the bodies. Nothing else in the crate depends on it; use it, or
-wire the modules yourself. `cargo run --example guard` shows the whole loop in about 100 lines.
+wire the modules yourself. Sentries weigh what to do by their priorities (`tactics::priority`) and keep to what they are in the middle of: they finish looking where they nearly are before a second noise, queue lesser leads, and stay attentive after a disturbance (all tunable). `cargo run --example guard` shows the whole loop in about 100 lines.
 
 ## Tuning
 
