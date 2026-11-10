@@ -83,7 +83,7 @@ impl Seeing {
 /// How an NPC sees: its tuning, as the other modules' [`Tuning`](crate::Tuning)s are.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(default))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct Sight {
     /// How far off it sees, in meters, at most.
     pub range: f32,

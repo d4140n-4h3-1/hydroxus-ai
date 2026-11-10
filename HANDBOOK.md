@@ -37,7 +37,16 @@ pub const AI: hydroxus_ai::Tuning = hydroxus_ai::Tuning::DEFAULT;
 npc.detection.step(&AI.detection, visible, eagerness, dt);
 ```
 
-With the `serde` feature, a `Tuning` reads from JSON, and anything the file leaves out keeps its default: `{"patrol": {"engage": 15.0}, "alert": {"caution": 90.0}}`.
+With the `serde` feature, a `Tuning` reads from JSON, and anything the file leaves out keeps its default: `{"patrol": {"engage": 15.0}, "alert": {"caution": 90.0}}`. A field name the tuning does not have is refused (`unknown field "fil", expected one of "fill", ...`), so a misspelling is an error rather than a default quietly kept.
+
+**Check it before use.** `tuning.validate()` returns `Err(Invalid)` listing every problem, one per field, each with where it is, what it is and what it should be: every number finite; none negative except `opinion.wary`, `opinion.hostile` and the leftward offsets in `group.about_leader`; shares and chances from 0 to 1; angles from 0 to π; half-lives, fill times and other divisors above 0; counts that would leave a module idle at least 1; random ranges low to high; and settings that contradict each other (`hostile < wary < friendly`, `fire.engage ≤ fire.fire_range`, `rumour.forgotten ≤ rumour.tellable`, `ties.flee_nerve ≤ ties.avenge_nerve`, `threat.too_close ≤ threat.unease_range`, `lesson.sway < 1` so that what failed is never barred). Most of the crate clamps bad numbers rather than crash, so without this they show up as an NPC quietly behaving oddly.
+
+```rust
+let tuning: hydroxus_ai::Tuning = serde_json::from_str(&text)?;   // unknown names refused
+if let Err(invalid) = tuning.validate() {
+    eprintln!("{invalid}");   // e.g. "detection.fill is 0, but must be more than 0"
+}
+```
 
 **The per-frame loop.** For each NPC the game does the same five things:
 

@@ -26,6 +26,7 @@
 //!   [`social::faction`]), what becomes of their own ([`social::ties`]), the trouble they keep
 //!   away from ([`social::trouble`]), how they take the player passing ([`social::passing`]), and
 //!   a city's crowd ([`social::crowd`]).
+//! - [`validate`]: checking a [`Tuning`] before it is used - every number, and the ones that contradict each other.
 //! - [`think`]: learning and adapting - what has worked for an NPC and what has not
 //!   ([`think::lesson`]), what the player tends to do ([`think::habit`]), and where they keep
 //!   turning up ([`think::haunt`]); fading with time, told on, and weighing what the rest does.
@@ -45,13 +46,15 @@
 
 /// A module's tuning: the numbers its behaviour turns on, as fields, with `DEFAULT` - and
 /// [`Default`] - the values the module documents, Maze's. With the `serde` feature, it can be read
-/// from a file, any field left out taking its default.
+/// from a file, any field left out taking its default, and any field it does not have refused -
+/// a misspelt name is an error, not a default quietly kept. [`Tuning::validate`] checks the
+/// numbers.
 macro_rules! tuning {
     ($(#[$meta:meta])* { $($(#[$field_meta:meta])* $field:ident: $ty:ty = $default:expr),* $(,)? }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq)]
         #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
         pub struct Tuning {
             $($(#[$field_meta])* pub $field: $ty,)*
         }
@@ -59,6 +62,14 @@ macro_rules! tuning {
         impl Tuning {
             /// The module's own numbers.
             pub const DEFAULT: Self = Self { $($field: $default,)* };
+
+            /// Every number in it by name, and its value, for [`crate::Tuning::validate`]: a pair's
+            /// as `name.0` and `name.1`, a list's as `name[n]`.
+            pub(crate) fn numbers(&self) -> Vec<(String, f64)> {
+                let mut out = Vec::new();
+                $(crate::validate::Numbers::numbers(&self.$field, stringify!($field).to_string(), &mut out);)*
+                out
+            }
         }
 
         impl Default for Tuning {
@@ -75,6 +86,7 @@ pub mod perception;
 pub mod social;
 pub mod tactics;
 pub mod think;
+pub mod validate;
 
 pub use nalgebra;
 
@@ -122,7 +134,7 @@ pub fn heading_of(way: Vector3<f32>) -> Option<f32> {
 /// [`SearchMap::with`]: tactics::search::SearchMap::with
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(default))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
 pub struct Tuning {
     /// Metal Gear's alert phases: how long each lasts.
     pub alert: crate::alert::Tuning,

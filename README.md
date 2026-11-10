@@ -115,7 +115,12 @@ Those that keep their numbers with them take them as they are made: a `WalkGrid`
 (`with_tuning`), a `NavMesh` how it is made and walked (`build_with`, `walk`), a traffic
 `Network` its layout, lights and driving (`from_roads_with`), a `Patrol`, a `SearchMap`, a
 `Crowd`, a report `Witness`. With the `serde` feature the whole of it can be read from a file;
-anything the file leaves out takes its default:
+anything the file leaves out takes its default, and a name it does not know - a misspelling - is
+refused with an error naming it. `Tuning::validate()` then checks every number in it: finite, not
+negative unless it is meant to be, shares from 0 to 1, angles within half a turn, ranges low to
+high, and settings that contradict each other (a guard engaging from further off than it can
+shoot), saying for each what it is and what it should be - `fire.engage is 30, but must be no
+more than fire.fire_range (24)`:
 
 ```toml
 hydroxus-ai = { git = "https://github.com/d4140n-4h3-1/hydroxus-ai.git", branch = "main", features = ["serde"] }
