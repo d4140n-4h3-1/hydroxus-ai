@@ -182,6 +182,10 @@ version of the exploring bias - looking an action up twice and taking a square r
 250). One look-up, and 1 at once for what was never tried: four alternating runs, before
 0.159-0.178 ms, after 0.158-0.177 ms.
 
+After milestone 5.2 (word passed between sentries, and the search map re-seeded when it empties),
+built from 8588249 and this milestone and run alternately: 250 sentries 0.163-0.187 ms a frame
+against 0.171-0.177 ms; 100, 0.032-0.035 ms against 0.032 ms. Within run-to-run spread.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide

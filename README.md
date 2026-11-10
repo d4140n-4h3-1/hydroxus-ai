@@ -68,6 +68,7 @@ It is in five folders, and its alert phases besides.
 | `rumour` | What each NPC knows of the player (`Minds`): deeds seen at full strength, told on weaker each time and minded less, fading and forgotten; one turning up afresh has heard what the town talks of. |
 | `chat` | What NPCs talk about among themselves: news one has for another, told on as they talk; or, feeling strongly, what one thinks of the player, swaying the rest; or nothing much. |
 | `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight, on the navmesh's pavement. |
+| `word` | News to act on, passed on: who saw what, where and when; firsthand or told, and how many times passed on; by voice (near, where it carries), radio (far, both need one) or alarm; believed as sure, as fresh and as trusted as it is - trust in each source learned from whether its word proves right. |
 
 ### `think` - learning and adapting
 
