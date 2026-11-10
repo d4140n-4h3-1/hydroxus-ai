@@ -266,9 +266,10 @@ pub struct Sentry {
     pub radio: bool,
     /// How far it trusts the word of each it has been told by.
     pub trust: Trust,
-    /// Whose word it is searching on, if anyone's: to trust the more if it finds them, the less
-    /// if it does not.
-    acting_on: Option<u32>,
+    /// Whose word it is searching on, if anyone's, and how old it was then: to trust them the more
+    /// if it finds the player, the less if it does not - unless the word was old already, when
+    /// coming to nothing says nothing of whoever gave it.
+    acting_on: Option<(u32, f32)>,
     alert: Option<Alert>,
     /// Seconds left of its phase, Evasion or Caution.
     left: f32,
@@ -444,7 +445,7 @@ impl Sentry {
             return false;
         }
         self.told = Some((word.at, word.age(now), belief));
-        self.acting_on = (!word.firsthand()).then_some(word.from);
+        self.acting_on = (!word.firsthand()).then_some((word.from, word.age(now)));
         true
     }
 
@@ -726,7 +727,7 @@ impl Sentry {
                     if phase == Alert::Evasion {
                         self.experience.report(tuning, Some(mesh), Outcome::succeeded(Venture::Search).at(senses.player));
                         // Searching on someone's word, and there they were: their word was good.
-                        if let Some(source) = self.acting_on.take() {
+                        if let Some((source, _)) = self.acting_on.take() {
                             self.trust.confirmed(&tuning.word, source);
                         }
                     }
@@ -737,9 +738,12 @@ impl Sentry {
                     self.goal = None;
                     self.look = None;
                     self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Search));
-                    // Searching on someone's word, and nothing: their word was no good.
-                    if let Some(source) = self.acting_on.take() {
-                        self.trust.refuted(&tuning.word, source);
+                    // Searching on someone's word, fresh when it acted on it, and nothing: their word
+                    // was no good. Word already old that came to nothing says nothing of them.
+                    if let Some((source, age)) = self.acting_on.take() {
+                        if age <= tuning.word.stale_half_life {
+                            self.trust.refuted(&tuning.word, source);
+                        }
                     }
                 }
                 (Alert::Caution, None) => {
@@ -759,7 +763,7 @@ impl Sentry {
     /// It saw another sentry after the player, at `player`, and joins in - and if it came on
     /// someone's word, the word was good.
     fn join(&mut self, tuning: &crate::Tuning, player: Vector3<f32>) {
-        if let Some(source) = self.acting_on.take() {
+        if let Some((source, _)) = self.acting_on.take() {
             self.trust.confirmed(&tuning.word, source);
         }
         self.alert = Some(Alert::Alert);

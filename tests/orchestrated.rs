@@ -939,6 +939,17 @@ fn word_from_one_whose_word_keeps_proving_wrong_comes_to_be_doubted_and_a_truste
     // The same word, from someone else it has no reason to doubt: it goes.
     let now = world.squad.now();
     assert!(world.sentries[0].hear_word(&AI, Word::seen((), at(30.0, 12.0), now, 78).passed_on(&AI.word, 78), now));
+    // Word already old when acted on, that comes to nothing, says nothing of whoever gave it. (By
+    // default word that old is not believed at all; a sentry readier to believe is needed.)
+    world.run(300.0, 0.25);
+    world.ai.orchestrate.believe = 0.1;
+    let ready = world.ai;
+    let now = world.squad.now();
+    let had = world.sentries[0].trust.of(&AI.word, 79);
+    assert!(world.sentries[0].hear_word(&ready, Word::seen((), at(30.0, 12.0), now - 30.0, 79).passed_on(&AI.word, 79), now));
+    world.run(300.0, 0.25);
+    assert!(world.first(0, Happened::GaveUp).is_some());
+    assert_eq!(world.sentries[0].trust.of(&AI.word, 79), had);
 }
 
 #[test]
