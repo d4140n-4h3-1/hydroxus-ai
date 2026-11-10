@@ -224,6 +224,8 @@ pub struct Tuning {
     pub haunt: crate::think::haunt::Tuning,
     /// Running the modules together, optionally (see [`orchestrate`]).
     pub orchestrate: crate::orchestrate::Tuning,
+    /// Weighing what to do by the situation and the NPC's traits.
+    pub priority: crate::tactics::priority::Tuning,
 }
 
 impl Tuning {
@@ -269,6 +271,7 @@ impl Tuning {
         habit: crate::think::habit::Tuning::DEFAULT,
         haunt: crate::think::haunt::Tuning::DEFAULT,
         orchestrate: crate::orchestrate::Tuning::DEFAULT,
+        priority: crate::tactics::priority::Tuning::DEFAULT,
     };
 }
 

@@ -85,7 +85,7 @@ fn orchestrated() {
                     } else {
                         0.0
                     };
-                    Senses { feet, heading, visible, player }
+                    Senses { feet, heading, visible, player, threat: 0.0 }
                 })
                 .collect();
             let t = Instant::now();

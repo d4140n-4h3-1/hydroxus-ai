@@ -147,6 +147,10 @@ frames' few milliseconds go is not yet profiled; losing the player (a new search
 to 250 m) and searchers choosing where to go (a cost map out to 100 m each) are the likely
 candidates.
 
+After milestone 2.2 (priorities weighed every frame by every sentry), two runs: 10 sentries
+0.0028–0.0029 ms a frame, 50 0.015–0.016 ms, 100 0.031–0.035 ms, 250 0.158–0.175 ms (worst
+4.1–4.4 ms). Within about 5% of 2.1's figures, which is inside run-to-run spread.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide

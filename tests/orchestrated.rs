@@ -9,6 +9,7 @@ use hydroxus_ai::{
     flat, heading_of,
     navigation::{grid::WalkGrid, navmesh::NavMesh, walk::route_to},
     orchestrate::{Happened, Intent, Pace, Senses, Sentry, Squad},
+    tactics::priority::{self, Traits},
     perception::sight::{Sight, Stance},
     tactics::conduct::{Conduct, Reasoners, Role},
     Tuning,
@@ -126,7 +127,7 @@ impl World {
                 } else {
                     0.0
                 };
-                Senses { feet: body.feet, heading: body.heading, visible, player: self.player }
+                Senses { feet: body.feet, heading: body.heading, visible, player: self.player, threat: 0.0 }
             })
             .collect();
         let feet: Vec<V> = self.bodies.iter().map(|b| b.feet).collect();
@@ -288,6 +289,70 @@ fn one_that_still_sees_another_on_the_chase_stays_on_it_rather_than_flickering()
     }
 }
 
+/// Two sentries side by side, spotting the player, who is then gone: both searching. When they
+/// lost them.
+fn two_searching(traits: [Traits; 2]) -> (World, f32) {
+    let sentries = traits.iter().zip([at(8.0, 1.0), at(8.0, 3.0)]).map(|(&t, feet)| (Sentry::new(Role::Sentry).with_traits(t), feet, EAST)).collect();
+    let mut world = World::with(sentries, at(20.0, 2.0));
+    world.run(4.0, 1.0 / 60.0);
+    world.player = GONE;
+    world.run(0.5, 1.0 / 60.0);
+    let lost = world.first(0, Happened::LostContact).expect("lost them");
+    assert!(world.first(1, Happened::LostContact).is_some());
+    (world, lost)
+}
+
+#[test]
+fn a_fresh_search_is_kept_to_over_a_faint_noise_but_a_cold_one_is_left_for_a_clear_lead() {
+    let (mut fresh, _) = two_searching([Traits::NEUTRAL; 2]);
+    fresh.sentries[0].hear(&AI, at(14.0, 2.0), 0.3);
+    fresh.run(1.0, 1.0 / 60.0);
+    assert!(fresh.first(0, Happened::Noticed).is_some(), "it noticed");
+    assert_eq!(fresh.sentries[0].conduct(), Some(Conduct::Search), "{:?}", fresh.sentries[0].context(&AI));
+    // Passed over, the faint lead goes cold and is let go: once the search runs out, it goes back
+    // to its routine, not off to look into a noise from a minute before.
+    while fresh.first(0, Happened::GaveUp).is_none() {
+        fresh.run(1.0, 1.0 / 60.0);
+        assert!(fresh.t < 200.0);
+    }
+    fresh.run(2.0, 1.0 / 60.0);
+    assert_eq!(fresh.sentries[0].conduct(), Some(Conduct::GoAbout));
+    assert_eq!(fresh.intents[0], Intent::Routine);
+
+    let (mut cold, lost) = two_searching([Traits::NEUTRAL; 2]);
+    cold.run(lost + 25.0 - cold.t, 1.0 / 60.0);
+    assert_eq!(cold.sentries[0].alert(), Some(Alert::Evasion), "still searching");
+    cold.sentries[0].hear(&AI, at(14.0, 2.0), 0.9);
+    cold.run(1.0, 1.0 / 60.0);
+    assert_eq!(cold.sentries[0].conduct(), Some(Conduct::Investigate), "{:?}", cold.sentries[0].context(&AI));
+}
+
+#[test]
+fn the_curious_follow_a_new_lead_where_the_incurious_keep_to_the_search() {
+    let curious = Traits { curiosity: 0.95, ..Traits::NEUTRAL };
+    let incurious = Traits { curiosity: 0.05, ..Traits::NEUTRAL };
+    let (mut world, lost) = two_searching([curious, incurious]);
+    world.run(lost + 15.0 - world.t, 1.0 / 60.0);
+    for s in 0..2 {
+        world.sentries[s].hear(&AI, at(14.0, 2.0), 0.7);
+    }
+    world.run(1.0, 1.0 / 60.0);
+    assert_eq!(world.sentries[0].conduct(), Some(Conduct::Investigate));
+    assert_eq!(world.sentries[1].conduct(), Some(Conduct::Search));
+}
+
+#[test]
+fn its_context_says_why() {
+    let (world, _) = two_searching([Traits::NEUTRAL; 2]);
+    let context = world.sentries[0].context(&AI);
+    assert!(context.urgency > 0.5 && context.urgency < 1.0, "searching: pressing, not as pressing as a chase");
+    assert!(context.sighting.is_some_and(|s| s > 0.9), "lost a moment ago");
+    assert!(context.lead.is_none());
+    assert_eq!(context.doing.map(|(c, _)| c), Some(Conduct::Search));
+    let weighed = priority::factors(&AI.priority, &Traits::NEUTRAL, &context, Conduct::Search);
+    assert!(weighed.confidence > 1.0 && weighed.urgency == 1.0 && weighed.traits == 1.0);
+}
+
 #[test]
 fn searchers_split_up_rather_than_all_go_to_the_same_place() {
     let mut world = World::new(&[(at(26.0, 2.0), EAST), (at(27.0, 1.0), EAST), (at(27.0, 3.0), EAST)], at(30.0, 2.0));
@@ -385,7 +450,7 @@ fn an_incident_plays_out_the_same_at_any_frame_rate() {
 fn nonsense_from_the_game_is_let_go() {
     let mut world = World::new(&[(at(8.0, 2.0), EAST)], at(20.0, 2.0));
     let mesh = level();
-    let senses = [Senses { feet: V::new(f32::NAN, 0.0, 0.0), heading: f32::INFINITY, visible: f32::NAN, player: V::new(f32::NAN, 0.0, 0.0) }];
+    let senses = [Senses { feet: V::new(f32::NAN, 0.0, 0.0), heading: f32::INFINITY, visible: f32::NAN, player: V::new(f32::NAN, 0.0, 0.0), threat: f32::NAN }];
     for dt in [f32::NAN, -1.0, f32::INFINITY, 1.0 / 60.0] {
         let thoughts = world.squad.step(&AI, &mesh, &mut world.reasoners, &mut world.sentries, &senses, false, |_, _| true, dt);
         assert_eq!(thoughts.len(), 1);

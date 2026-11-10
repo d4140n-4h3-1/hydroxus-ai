@@ -264,6 +264,20 @@ for verdict in experience.report(&tuning, Some(&mesh), Outcome::came_to_nothing(
 
 **Where the player turns up** (`think::haunt`). `Haunts` keeps where the player was seen (`seen_at`) and found hiding (`found_at`, counting 3×), by navmesh cell, so haunts survive doors opening and shutting. Report the moments that matter, such as spotted, lost or found, not every frame. Once the player is lost, `haunts.lean(tuning, mesh, &mut map)` after `SearchMap::lose` weighs each polygon by the haunts within 4 m of it, up to twice as likely. It only reweighs where they could be, never adds chance where they could not have got to. `likeliest(mesh)` gives a patrol somewhere to go by. At most 64 haunts are kept, and each fades halfway in 30 minutes.
 
+### Priorities (`tactics::priority`)
+
+The conduct reasoner's order is fixed by role. `priority::weigh(tuning, traits, context, conduct)` gives a multiplier per conduct from the situation, to pass as the bias of `Reasoner::choose_by`, or to `Experience::choose_with`, which multiplies it with what the NPC has learned:
+
+| Factor | From | Effect (default bound) |
+|--------|------|------------------------|
+| urgency | `Context::urgency`, 0–1 | responding (chase, fight, shoot back, shelter, report) up to ×1.5; company and routine down as much |
+| threat | `Context::threat`, 0–1 | shelter and back away up to ×2, scaled by caution minus aggression |
+| confidence | `Context::sighting`, `Context::lead`, each `Option` 0–1 | chase and search by the sighting, investigate by the lead, ×0.5 to ×1.5 |
+| commitment | `Context::doing` (conduct, seconds) | what it is doing, up to ×1.3 once it has been at it `committed_after` (4 s) |
+| traits | `Traits { aggression, caution, curiosity }`, 0.5 neutral | chase, fight, shoot back / shelter, back away, watch / investigate, each ×0.6 to ×1.4 |
+
+Every factor is exactly 1 with a default `Context` and neutral `Traits`, so passing nothing changes nothing. A bias can weigh a conduct down but never opens one the reasoner's considerations shut. `factors(...)` returns each factor separately, for a debug overlay showing why an NPC did what it did. `validate` keeps confidence and trait weights under 1, so nothing is ever weighed to nothing.
+
 ## Orchestration (optional, `orchestrate`)
 
 The per-frame loop above, written once. A `Sentry` per NPC and one `Squad` for those that hunt together:
@@ -286,7 +300,7 @@ sentries[n].tell(at);                                    // a witness, a radio c
 sentries[n].no_way(&AI);                                 // your router found no way to its GoTo
 ```
 
-What it does for you: awareness from what each sentry sees, and what it hears; noticing something leads to an investigation (`Pace::Walk`). Spotting leads to Alert and a chase (`Pace::Run`). Losing them sets the squad's search map going where they were last seen, heading the way they were going; it spreads at `orchestrate.getaway` (4 m/s) and is looked over every `look_every` (0.25 s), out to `search_sight` (16 m). Each searcher goes to the likeliest place no one else is heading for (at least `apart`, 4 m, from the others) at `Pace::Search`, and looks about there (`LookAbout`). Then come Caution and calm, with wariness stretching each phase. A sentry that sees another chasing joins in, and stays on the chase while it can see it. Conduct is chosen by the role's utility reasoner, weighed by each sentry's `Experience`, which it reports outcomes to itself. Its routine is yours (`Intent::Routine`) or a beat (`with_beat`).
+What it does for you: awareness from what each sentry sees, and what it hears; noticing something leads to an investigation (`Pace::Walk`). Spotting leads to Alert and a chase (`Pace::Run`). Losing them sets the squad's search map going where they were last seen, heading the way they were going; it spreads at `orchestrate.getaway` (4 m/s) and is looked over every `look_every` (0.25 s), out to `search_sight` (16 m). Each searcher goes to the likeliest place no one else is heading for (at least `apart`, 4 m, from the others) at `Pace::Search`, and looks about there (`LookAbout`). Then come Caution and calm, with wariness stretching each phase. A sentry that sees another chasing joins in, and stays on the chase while it can see it. Conduct is chosen by the role's utility reasoner, weighed by each sentry's priorities (`traits`, `with_traits`; `context()` shows what it saw) and its `Experience`, which it reports outcomes to itself. A noise heard while searching or watchful becomes a lead it may follow or pass over: a fresh trail beats a faint noise, a clear noise beats a cold trail, and the curious follow more leads. A lead passed over until it is all but cold (under `LEAD_FORGOTTEN`, 5%) is let go. `Senses::threat` (0 if the game has no shooting) feeds threat and urgency. Its routine is yours (`Intent::Routine`) or a beat (`with_beat`).
 
 Costs, from `examples/ai_bench.rs` on a Ryzen 9 5900X: 100 sentries 0.03 ms a frame, 250 sentries 0.15–0.17 ms (worst frame about 4 ms, not yet profiled). `Sentry` and `Squad` save with `serde`.
 

@@ -122,8 +122,8 @@ fn an_orchestrated_squad_saved_mid_search_carries_on_as_if_never_saved() {
     // Stood still, facing the player, then the player gone: spotted, then lost.
     let senses = |visible: f32| {
         [
-            Senses { feet: Vector3::new(5.5, 0.0, 2.5), heading: 1.2, visible, player },
-            Senses { feet: Vector3::new(6.5, 0.0, 1.5), heading: 1.0, visible: 0.0, player },
+            Senses { feet: Vector3::new(5.5, 0.0, 2.5), heading: 1.2, visible, player, threat: 0.0 },
+            Senses { feet: Vector3::new(6.5, 0.0, 1.5), heading: 1.0, visible: 0.0, player, threat: 0.0 },
         ]
     };
     for frame in 0..240 {

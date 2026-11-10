@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 39] = [
+        let modules: [(&str, Vec<(String, f64)>); 40] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -271,6 +271,7 @@ impl Tuning {
             ("habit", self.habit.numbers()),
             ("haunt", self.haunt.numbers()),
             ("orchestrate", self.orchestrate.numbers()),
+            ("priority", self.priority.numbers()),
         ];
         for (module, numbers) in modules {
             c.numbers(module, numbers);
@@ -283,7 +284,7 @@ impl Tuning {
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
                     "cover", "team", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
-                    "passing", "lesson", "habit", "haunt", "orchestrate",
+                    "passing", "lesson", "habit", "haunt", "orchestrate", "priority",
                 ]
                 .map(String::from),
             )
@@ -480,6 +481,15 @@ impl Tuning {
         c.positive("orchestrate.arrived", o.arrived);
         c.positive("orchestrate.look_every", o.look_every);
         c.positive("orchestrate.within", o.within);
+        c.positive("orchestrate.sighting_half_life", o.sighting_half_life);
+        c.positive("orchestrate.lead_half_life", o.lead_half_life);
+        c.fraction("orchestrate.told", o.told);
+
+        let p = &self.priority;
+        c.positive("priority.committed_after", p.committed_after);
+        // Weighing down by as much as all of it would bar what it weighs: less than 1.
+        c.below("priority.confidence", p.confidence, "1, so that nothing is barred", 1.0);
+        c.below("priority.traits", p.traits, "1, so that nothing is barred", 1.0);
     }
 }
 

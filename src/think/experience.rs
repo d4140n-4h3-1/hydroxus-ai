@@ -154,7 +154,21 @@ impl<T: Copy + Eq> Experience<T> {
     /// weighed by what it learned, going about its business with nothing else open to it - and
     /// it notes it is doing it, for what comes of it.
     pub fn choose(&mut self, tuning: &crate::Tuning, reasoners: &mut Reasoners, role: Role, reading: &Reading, current: Option<Conduct>) -> Conduct {
-        let conduct = self.lessons.choose(&tuning.lesson, reasoners.of(role), reading, current).unwrap_or(Conduct::GoAbout);
+        self.choose_with(tuning, reasoners, role, reading, current, |_| 1.0)
+    }
+
+    /// As [`Experience::choose`], each conduct weighed by `weigh` of it as well as by what it
+    /// learned: by its priorities, say ([`crate::tactics::priority::weigh`]).
+    pub fn choose_with(
+        &mut self,
+        tuning: &crate::Tuning,
+        reasoners: &mut Reasoners,
+        role: Role,
+        reading: &Reading,
+        current: Option<Conduct>,
+        weigh: impl Fn(Conduct) -> f32,
+    ) -> Conduct {
+        let conduct = self.lessons.choose_with(&tuning.lesson, reasoners.of(role), reading, current, weigh).unwrap_or(Conduct::GoAbout);
         self.trail.doing(conduct);
         conduct
     }

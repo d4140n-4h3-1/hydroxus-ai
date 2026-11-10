@@ -14,6 +14,7 @@
 //! - [`cover`]: a bystander running from a shooting, to somewhere it cannot be seen from.
 //! - [`team`]: fighting as a team: shared sightings, targets, cover, flanking, covering fire.
 //! - [`patrol`]: a flying sentry's patrol, search and Alert, and its flight along its route.
+//! - [`priority`]: weighing what to do by urgency, threat, confidence, commitment and traits.
 //! - [`utility`]: utility scoring - weighing what an NPC could do against what it takes in.
 //! - [`conduct`]: what an NPC on foot does next, by utility, by its role: chasing, searching,
 //!   telling a sentry, sheltering, mourning, keeping away, following, going about its business.
@@ -28,6 +29,7 @@ pub mod join;
 pub mod look;
 pub mod pace;
 pub mod patrol;
+pub mod priority;
 pub mod search;
 pub mod team;
 pub mod threat;

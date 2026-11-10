@@ -72,7 +72,7 @@ fn main() {
                 } else {
                     0.0
                 };
-                Senses { feet: *feet, heading: *heading, visible, player }
+                Senses { feet: *feet, heading: *heading, visible, player, threat: 0.0 }
             })
             .collect();
         // 2. Think.

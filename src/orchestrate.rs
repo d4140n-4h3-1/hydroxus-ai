@@ -44,6 +44,7 @@ use crate::{
         investigate::{Doing, Investigation},
         join::{joiners, Watch},
         look::LookAbout,
+        priority::{self, Context, Traits},
         search::SearchMap,
     },
     think::experience::{Experience, Outcome, Venture},
@@ -62,6 +63,15 @@ pub const WITHIN: f32 = 100.0;
 pub const GETAWAY: f32 = 4.0;
 /// How far a searcher's look clears the search map, in meters.
 pub const SEARCH_SIGHT: f32 = 16.0;
+/// How long, in seconds, till a sentry is half as sure of where it saw the player, and of a lead
+/// it is following.
+pub const SIGHTING_HALF_LIFE: f32 = 15.0;
+pub const LEAD_HALF_LIFE: f32 = 10.0;
+/// How sure a sentry is of where it is told the player is, against seeing them itself.
+pub const TOLD: f32 = 0.6;
+/// How sure of a lead it has passed over, at least, for it to keep it in mind: under this, it lets
+/// it go, rather than look into a noise long after.
+pub const LEAD_FORGOTTEN: f32 = 0.05;
 
 tuning!(
     /// How the orchestration layer runs the modules together (see the module's constants).
@@ -78,6 +88,11 @@ tuning!(
         getaway: f32 = GETAWAY,
         /// How far a searcher's look clears the search map, in meters.
         search_sight: f32 = SEARCH_SIGHT,
+        /// How long till a sentry is half as sure of where it saw the player, and of a lead.
+        sighting_half_life: f32 = SIGHTING_HALF_LIFE,
+        lead_half_life: f32 = LEAD_HALF_LIFE,
+        /// How sure it is of where it is told the player is, from 0 to 1.
+        told: f32 = TOLD,
     }
 );
 
@@ -129,7 +144,7 @@ pub enum Happened {
 }
 
 /// What a sentry takes in this frame: the game's part.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Senses {
     /// Where it stands, and which way it faces.
     pub feet: Vector3<f32>,
@@ -140,6 +155,9 @@ pub struct Senses {
     pub visible: f32,
     /// Where the player is.
     pub player: Vector3<f32>,
+    /// How dangerous things are for it, from 0 to 1: shot at, a weapon on it (see
+    /// [`priority::Context::threat`]). 0 if the game has no shooting.
+    pub threat: f32,
 }
 
 /// What came of a sentry's frame.
@@ -168,6 +186,8 @@ pub struct Sentry {
     pub wariness: Wariness,
     /// What it has been through, and learned from it.
     pub experience: Experience,
+    /// What kind of NPC it is: aggressive, cautious, curious (see [`priority`]).
+    pub traits: Traits,
     alert: Option<Alert>,
     /// Seconds left of its phase, Evasion or Caution.
     left: f32,
@@ -178,6 +198,13 @@ pub struct Sentry {
     beat: Vec<Vector3<f32>>,
     post: usize,
     conduct: Option<Conduct>,
+    /// How long it has been doing it, in seconds.
+    doing_for: f32,
+    /// How sure it was of where it saw the player, when it did, and how long ago that was; and of
+    /// its lead, and how long ago.
+    sighting: (f32, f32),
+    lead: (f32, f32),
+    threat: f32,
     /// Where it last saw the player, and which way they were going.
     last_seen: Option<Vector3<f32>>,
     going: Vector3<f32>,
@@ -196,6 +223,7 @@ impl Sentry {
             detection: Detection::default(),
             wariness: Wariness::default(),
             experience: Experience::new(),
+            traits: Traits::NEUTRAL,
             alert: None,
             left: 0.0,
             investigation: None,
@@ -204,6 +232,10 @@ impl Sentry {
             beat: Vec::new(),
             post: 0,
             conduct: None,
+            doing_for: 0.0,
+            sighting: (0.0, 0.0),
+            lead: (0.0, 0.0),
+            threat: 0.0,
             last_seen: None,
             going: Vector3::zeros(),
             told: None,
@@ -245,6 +277,31 @@ impl Sentry {
         self.goal
     }
 
+    /// Its traits instead: what kind of NPC it is.
+    pub fn with_traits(mut self, traits: Traits) -> Self {
+        self.traits = traits;
+        self
+    }
+
+    /// The situation as it sees it, as its priorities weigh it (see [`priority::Context`]).
+    pub fn context(&self, tuning: &crate::Tuning) -> Context {
+        let o = &tuning.orchestrate;
+        let fade = |(sure, since): (f32, f32), half_life: f32| sure * 0.5f32.powf(since / half_life.max(1.0e-3));
+        let pressing: f32 = match self.alert {
+            Some(Alert::Alert) => 1.0,
+            Some(Alert::Evasion) => 0.6,
+            Some(Alert::Caution) => 0.2,
+            None => 0.0,
+        };
+        Context {
+            urgency: pressing.max(self.threat),
+            threat: self.threat,
+            sighting: self.last_seen.map(|_| fade(self.sighting, o.sighting_half_life)),
+            lead: self.investigation.map(|_| fade(self.lead, o.lead_half_life)),
+            doing: self.conduct.map(|c| (c, self.doing_for)),
+        }
+    }
+
     /// It is told the player is about `at`: by a witness, a radio call, an alarm. Unless it is
     /// after them already, it searches there next frame.
     pub fn tell(&mut self, at: Vector3<f32>) {
@@ -254,15 +311,24 @@ impl Sentry {
     }
 
     /// A noise `nearness` near (see [`Heard::nearness`]): the more aware for it, and if it notices
-    /// something for it, it goes to look at `at`.
+    /// something for it, it goes to look at `at` - calm. Searching or watchful, it is a lead: one
+    /// it may follow, or keep to its search, as its priorities weigh the two (see [`priority`]).
+    /// After the player, it takes no notice.
     pub fn hear(&mut self, tuning: &crate::Tuning, at: Vector3<f32>, nearness: f32) {
         if !nearness.is_finite() || !at.iter().all(|v| v.is_finite()) {
             return;
         }
         let eagerness = self.eagerness(tuning);
         self.wariness.note(&tuning.alert, Incident::Heard);
-        if self.detection.hear(&tuning.detection, nearness, eagerness) == Some(Change::Noticed) && self.alert.is_none() {
-            self.investigation.get_or_insert(Investigation::new(&tuning.investigate, at));
+        let noticed = self.detection.hear(&tuning.detection, nearness, eagerness) == Some(Change::Noticed);
+        match self.alert {
+            None if noticed => (),
+            Some(Alert::Evasion | Alert::Caution) if nearness > 0.0 => (),
+            _ => return,
+        }
+        if self.investigation.is_none() || nearness >= self.lead.0 {
+            self.investigation = Some(Investigation::new(&tuning.investigate, at));
+            self.lead = (unit(nearness), 0.0);
             self.happened.push(Happened::Noticed);
         }
     }
@@ -286,6 +352,7 @@ impl Sentry {
     }
 
     fn investigation_done(&mut self, tuning: &crate::Tuning) {
+        self.investigation = None;
         self.happened.push(Happened::InvestigationDone);
         self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Investigation));
     }
@@ -309,6 +376,9 @@ impl Sentry {
             self.heading = senses.heading;
         }
         let player_known = senses.player.iter().all(|v| v.is_finite());
+        self.threat = unit(senses.threat);
+        self.sighting.1 += dt;
+        self.lead.1 += dt;
         let visible = if senses.visible.is_finite() && player_known { senses.visible.max(0.0) } else { 0.0 };
         self.wariness.step(&tuning.alert, dt);
         let eagerness = self.eagerness(tuning);
@@ -322,6 +392,7 @@ impl Sentry {
                 self.happened.push(Happened::Noticed);
                 self.wariness.note(&tuning.alert, Incident::Noticed);
                 self.investigation.get_or_insert(Investigation::new(&tuning.investigate, senses.player));
+                self.lead = (self.detection.level, 0.0);
             }
             Some(Change::Spotted) if self.alert.is_none() => {
                 self.happened.push(Happened::Spotted);
@@ -334,6 +405,7 @@ impl Sentry {
             _ if visible > 0.0 => {
                 if let Some(look) = self.investigation.as_mut() {
                     look.saw_again(&tuning.investigate, senses.player);
+                    self.lead = (self.lead.0.max(self.detection.level), 0.0);
                 }
             }
             _ => (),
@@ -344,12 +416,14 @@ impl Sentry {
                 self.going = self.going * (-4.0 * dt).exp() + flat(senses.player - was);
             }
             self.last_seen = Some(senses.player);
+            self.sighting = (if visible > 0.0 { 1.0 } else { 0.8 }, 0.0);
         }
         // Told where to look: it searches there.
         if let Some(there) = self.told.take().filter(|_| self.alert != Some(Alert::Alert)) {
             self.wariness.note(&tuning.alert, Incident::Alarm);
             self.alert = Some(Alert::Evasion);
             self.last_seen = Some(there);
+            self.sighting = (unit(tuning.orchestrate.told), 0.0);
             self.going = Vector3::zeros();
             self.investigation = None;
             self.lost_at(tuning, search, mesh, there, None);
@@ -421,10 +495,21 @@ impl Sentry {
             wariness: self.wariness.level,
             ..Reading::default()
         };
-        let conduct = self.experience.choose(tuning, reasoners, self.role, &reading, self.conduct);
+        let context = self.context(tuning);
+        let traits = self.traits;
+        let conduct = self.experience.choose_with(tuning, reasoners, self.role, &reading, self.conduct, |c| {
+            priority::weigh(&tuning.priority, &traits, &context, c)
+        });
         if self.conduct != Some(conduct) {
             self.goal = None;
             self.look = None;
+            self.doing_for = 0.0;
+        } else {
+            self.doing_for += dt;
+        }
+        // A lead passed over till it is all but cold is let go.
+        if conduct != Conduct::Investigate && context.lead.is_some_and(|lead| lead < LEAD_FORGOTTEN) {
+            self.investigation = None;
         }
         self.conduct = Some(conduct);
         let there = |goal: Vector3<f32>, feet: Vector3<f32>| flat(goal - feet).norm() <= t.arrived;
@@ -594,5 +679,14 @@ impl Squad {
             thoughts.push(Thought { intent, conduct, happened: std::mem::take(&mut sentry.happened) });
         }
         thoughts
+    }
+}
+
+/// `x` brought to 0 to 1, nothing that is not a number.
+fn unit(x: f32) -> f32 {
+    if x.is_nan() {
+        0.0
+    } else {
+        x.clamp(0.0, 1.0)
     }
 }

@@ -188,7 +188,20 @@ impl<A: Copy + PartialEq> Lessons<A> {
     /// What `reasoner` chooses in `situation`, doing `current` already, with what it learned
     /// weighing each action (see [`Reasoner::choose_by`]).
     pub fn choose<I: Copy>(&self, tuning: &Tuning, reasoner: &mut Reasoner<A, I>, situation: &impl Situation<I>, current: Option<A>) -> Option<A> {
-        reasoner.choose_by(situation, current, |action| self.bias(tuning, action))
+        self.choose_with(tuning, reasoner, situation, current, |_| 1.0)
+    }
+
+    /// As [`Lessons::choose`], each action weighed by `weigh` of it as well - by the situation,
+    /// say (see [`crate::tactics::priority`]).
+    pub fn choose_with<I: Copy>(
+        &self,
+        tuning: &Tuning,
+        reasoner: &mut Reasoner<A, I>,
+        situation: &impl Situation<I>,
+        current: Option<A>,
+        weigh: impl Fn(A) -> f32,
+    ) -> Option<A> {
+        reasoner.choose_by(situation, current, |action| self.bias(tuning, action) * weigh(action).max(0.0))
     }
 
     fn move_towards(&mut self, tuning: &Tuning, action: A, outcome: f32, rate: f32) -> Option<Verdict<A>> {
