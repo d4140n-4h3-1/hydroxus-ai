@@ -25,7 +25,7 @@ crate already did before the roadmap.
 | 4.4 Frozen ML | Not started | |
 | 5.1–5.4 Social and group | Partial | `social` (factions, ties, rumours with first/second hand, report, group), `tactics::team`. Not reviewed against 5.2's list. |
 | 6.1–6.3 Navigation | Partial | Navmesh with storeys, doors, ferries, trains; `examples/navmesh_bench.rs`. No scaling suite. |
-| 7.1–7.4 Performance | Partial | `examples/ai_bench.rs`, `navmesh_bench.rs`; Maze's `BATTLE_BENCH`. No 1→1,000 NPC scaling, no low-end profile. |
+| 7.1–7.4 Performance | Partial | `BENCHMARKS.md` (2026-11-10) records hardware and results for `ai_bench` and Maze's team battle (`BATTLE_BENCH`, arena and forest). `navmesh_bench` was not run: it needs a dumped grid, and none exists. No scaling from 1 to 1,000 NPCs, no memory measurements, no low-end profile. |
 | 8 Demonstrations | Not started | Maze is the only integration. |
 | 9 Documentation | Partial | `HANDBOOK.md` (single file), rustdoc on every public item. No `docs/handbook/` chapters, no CHANGELOG. |
 | 10 Release | Not started | |
