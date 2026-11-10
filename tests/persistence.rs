@@ -107,3 +107,37 @@ fn a_guard_saved_mid_incident_carries_on_as_if_never_saved() {
     }
     assert!(guard.alert.is_some() && guard.wariness.level > 0.0, "still mid-incident: {guard:?}");
 }
+
+#[test]
+fn an_orchestrated_squad_saved_mid_search_carries_on_as_if_never_saved() {
+    use hydroxus_ai::{
+        orchestrate::{Senses, Sentry, Squad},
+        tactics::conduct::{Reasoners, Role},
+    };
+    let mesh = level();
+    let mut squad = Squad::new(&AI);
+    let mut sentries = vec![Sentry::new(Role::Sentry), Sentry::new(Role::Sentry).with_beat(vec![Vector3::new(2.5, 0.0, 2.5), Vector3::new(9.5, 0.0, 2.5)])];
+    let mut reasoners = Reasoners::default();
+    let player = Vector3::new(15.5, 0.0, 6.5);
+    // Stood still, facing the player, then the player gone: spotted, then lost.
+    let senses = |visible: f32| {
+        [
+            Senses { feet: Vector3::new(5.5, 0.0, 2.5), heading: 1.2, visible, player },
+            Senses { feet: Vector3::new(6.5, 0.0, 1.5), heading: 1.0, visible: 0.0, player },
+        ]
+    };
+    for frame in 0..240 {
+        let visible = if frame < 150 { 0.9 } else { 0.0 };
+        squad.step(&AI, &mesh, &mut reasoners, &mut sentries, &senses(visible), false, |_, _| true, 1.0 / 60.0);
+    }
+    assert!(sentries[0].alert().is_some());
+    let saved = serde_json::to_string(&(&squad, &sentries)).unwrap();
+    let (mut squad2, mut sentries2): (Squad, Vec<Sentry>) = serde_json::from_str(&saved).unwrap();
+    let mut reasoners2 = Reasoners::default();
+    for frame in 0..1200 {
+        let a = squad.step(&AI, &mesh, &mut reasoners, &mut sentries, &senses(0.0), false, |_, _| true, 1.0 / 60.0);
+        let b = squad2.step(&AI, &mesh, &mut reasoners2, &mut sentries2, &senses(0.0), false, |_, _| true, 1.0 / 60.0);
+        assert_eq!(a, b, "frame {frame}");
+        assert_eq!(sentries, sentries2, "frame {frame}");
+    }
+}

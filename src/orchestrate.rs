@@ -1,0 +1,598 @@
+//! Orchestration, optional: the crate's modules run together as one guard's mind, and a squad's.
+//!
+//! Every other module stands on its own, and a game can wire them up however it likes (as
+//! `tests/scenarios.rs` and Maze's `inhabitants.rs` do). What every game ends up writing is
+//! the same glue: awareness filling into a noticed-something, then an investigation; spotted, the
+//! alert phase with its seconds left and how wariness stretches them; lost, a search map to
+//! spread and look over on a clock, and searchers sent to different places on it; another sentry
+//! joining in a chase it sees; being told where to look; choosing what to do by utility, weighed by
+//! what it has learned; and, once calm, back to its routine. This module is that glue, so that a
+//! game need not write it - and nothing else in the crate depends on it.
+//!
+//! - A [`Sentry`] is one NPC's mind: what it is aware of, its alert phase, what it is doing about
+//!   it, and what it has learned ([`Experience`]).
+//! - A [`Squad`] is what sentries share: the search map, and the clock it is looked over by.
+//! - Each frame the game says what each sentry takes in ([`Senses`]: where it stands, which way it
+//!   faces, how visible the player is to it - the game casts the rays), and [`Squad::step`] gives
+//!   back, for each, a [`Thought`]: what it means to do ([`Intent`]: its routine, to go somewhere
+//!   at a [`Pace`], or to face a way), what it chose ([`Conduct`]), and what happened to it
+//!   ([`Happened`]) for the game to say, play or show.
+//!
+//! The game still moves the body: it routes to where an [`Intent::GoTo`] says, walks or runs it
+//! there, and turns it as an [`Intent::Face`] says; it tells a sentry when there is no way there
+//! ([`Sentry::no_way`]), what it hears ([`Squad::noise`]) and what it is told ([`Sentry::tell`]).
+//! Its routine is the game's own ([`Intent::Routine`]), unless it is given a beat to walk
+//! ([`Sentry::with_beat`]).
+//!
+//! The phases it goes through are the crate's own ([`crate::alert`]): calm; noticing something
+//! (awareness past caution), it investigates; spotted, Alert, chasing; lost, Evasion, searching,
+//! where the player was lost, then wherever the shared search map says they likeliest are; the
+//! search run out, Caution - back about its routine, but warier, and quicker to spot; and then calm
+//! again. Its wariness from all this fades over minutes ([`crate::alert::Wariness`]).
+
+use crate::{
+    alert::{Alert, Incident, Wariness},
+    flat,
+    navigation::navmesh::NavMesh,
+    perception::{
+        detection::{Change, Detection},
+        hearing::Heard,
+        sight::{Seeing, Stance},
+    },
+    tactics::{
+        conduct::{Conduct, Reading, Reasoners, Role},
+        investigate::{Doing, Investigation},
+        join::{joiners, Watch},
+        look::LookAbout,
+        search::SearchMap,
+    },
+    think::experience::{Experience, Outcome, Venture},
+};
+use nalgebra::Vector3;
+
+/// How near where it is going counts as there, in meters.
+pub const ARRIVED: f32 = 1.0;
+/// How often the searchers look over the search map, in seconds.
+pub const LOOK_EVERY: f32 = 0.25;
+/// How far apart searchers keep where they are going, in meters.
+pub const APART: f32 = 4.0;
+/// How far, in meters of walking, a searcher goes at most to search somewhere.
+pub const WITHIN: f32 = 100.0;
+/// How fast the player is taken to get away, in meters per second, for where they could be.
+pub const GETAWAY: f32 = 4.0;
+/// How far a searcher's look clears the search map, in meters.
+pub const SEARCH_SIGHT: f32 = 16.0;
+
+tuning!(
+    /// How the orchestration layer runs the modules together (see the module's constants).
+    {
+        /// How near where it is going counts as there, in meters.
+        arrived: f32 = ARRIVED,
+        /// How often the searchers look over the search map, in seconds.
+        look_every: f32 = LOOK_EVERY,
+        /// How far apart searchers keep where they are going, in meters.
+        apart: f32 = APART,
+        /// How far, in meters of walking, a searcher goes at most to search somewhere.
+        within: f32 = WITHIN,
+        /// How fast the player is taken to get away, in meters per second.
+        getaway: f32 = GETAWAY,
+        /// How far a searcher's look clears the search map, in meters.
+        search_sight: f32 = SEARCH_SIGHT,
+    }
+);
+
+/// How fast to go: as the game has its NPCs walk, hurry and run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Pace {
+    /// About its business, or going to look at something.
+    Walk,
+    /// Searching.
+    Search,
+    /// After the player.
+    Run,
+}
+
+/// What a sentry means to do this frame, for the game to carry out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Intent {
+    /// Its routine, whatever the game has it do: there is nothing else on its mind.
+    Routine,
+    /// Go to `at`, at `pace`: route there if it is not already going there.
+    GoTo { at: Vector3<f32>, pace: Pace },
+    /// Stand, facing `heading`.
+    Face { heading: f32 },
+}
+
+/// Something that happened to a sentry, for the game to say, play or show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Happened {
+    /// It noticed something, and goes to look.
+    Noticed,
+    /// It spotted the player: Alert.
+    Spotted,
+    /// It lost sight of the player: Evasion, searching.
+    LostContact,
+    /// Searching, or watchful, it saw them again: Alert.
+    FoundAgain,
+    /// It looked where it noticed something, and found nothing.
+    InvestigationDone,
+    /// Its search ran out: Caution.
+    GaveUp,
+    /// It is calm again.
+    Calm,
+    /// It was told where to look, and searches there.
+    Told,
+    /// It saw another sentry after the player, and joined in.
+    Joined,
+}
+
+/// What a sentry takes in this frame: the game's part.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Senses {
+    /// Where it stands, and which way it faces.
+    pub feet: Vector3<f32>,
+    pub heading: f32,
+    /// How visible the player is to it, from 0 - out of sight, or anything in the way - to 1: see
+    /// [`crate::perception::sight::Sight::visibility`], times nothing if the game's ray is
+    /// blocked.
+    pub visible: f32,
+    /// Where the player is.
+    pub player: Vector3<f32>,
+}
+
+/// What came of a sentry's frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Thought {
+    /// What it means to do.
+    pub intent: Intent,
+    /// What it chose to do, by utility.
+    pub conduct: Conduct,
+    /// What happened to it this frame, in order.
+    pub happened: Vec<Happened>,
+}
+
+/// One NPC's mind: what it is aware of, its alert phase, what it is doing about it, and what it
+/// has learned.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Sentry {
+    /// What kind of NPC it is, which weighs its choices.
+    pub role: Role,
+    /// How sure of itself it is, from 0 to 1 (see [`Reading::nerve`]).
+    pub nerve: f32,
+    /// How aware of the player it is.
+    pub detection: Detection,
+    /// How wary it is from what it has been through.
+    pub wariness: Wariness,
+    /// What it has been through, and learned from it.
+    pub experience: Experience,
+    alert: Option<Alert>,
+    /// Seconds left of its phase, Evasion or Caution.
+    left: f32,
+    investigation: Option<Investigation>,
+    look: Option<LookAbout>,
+    /// Where it is going, searching or walking its beat.
+    goal: Option<Vector3<f32>>,
+    beat: Vec<Vector3<f32>>,
+    post: usize,
+    conduct: Option<Conduct>,
+    /// Where it last saw the player, and which way they were going.
+    last_seen: Option<Vector3<f32>>,
+    going: Vector3<f32>,
+    told: Option<Vector3<f32>>,
+    feet: Vector3<f32>,
+    heading: f32,
+    happened: Vec<Happened>,
+}
+
+impl Sentry {
+    /// A calm NPC of `role`, its routine the game's own.
+    pub fn new(role: Role) -> Self {
+        Self {
+            role,
+            nerve: 0.5,
+            detection: Detection::default(),
+            wariness: Wariness::default(),
+            experience: Experience::new(),
+            alert: None,
+            left: 0.0,
+            investigation: None,
+            look: None,
+            goal: None,
+            beat: Vec::new(),
+            post: 0,
+            conduct: None,
+            last_seen: None,
+            going: Vector3::zeros(),
+            told: None,
+            feet: Vector3::zeros(),
+            heading: 0.0,
+            happened: Vec::new(),
+        }
+    }
+
+    /// Its routine, walking from one of `posts` to the next and round again, rather than the
+    /// game's own.
+    pub fn with_beat(mut self, posts: Vec<Vector3<f32>>) -> Self {
+        self.beat = posts.into_iter().filter(|p| p.iter().all(|v| v.is_finite())).collect();
+        self
+    }
+
+    /// Its alert phase: none, calm.
+    pub fn alert(&self) -> Option<Alert> {
+        self.alert
+    }
+
+    /// What it chose to do last.
+    pub fn conduct(&self) -> Option<Conduct> {
+        self.conduct
+    }
+
+    /// Where it last saw the player, if it has.
+    pub fn last_seen(&self) -> Option<Vector3<f32>> {
+        self.last_seen
+    }
+
+    /// Where it stood last frame.
+    pub fn feet(&self) -> Vector3<f32> {
+        self.feet
+    }
+
+    /// Where it is going, searching or on its beat, if anywhere.
+    pub fn goal(&self) -> Option<Vector3<f32>> {
+        self.goal
+    }
+
+    /// It is told the player is about `at`: by a witness, a radio call, an alarm. Unless it is
+    /// after them already, it searches there next frame.
+    pub fn tell(&mut self, at: Vector3<f32>) {
+        if at.iter().all(|v| v.is_finite()) {
+            self.told = Some(at);
+        }
+    }
+
+    /// A noise `nearness` near (see [`Heard::nearness`]): the more aware for it, and if it notices
+    /// something for it, it goes to look at `at`.
+    pub fn hear(&mut self, tuning: &crate::Tuning, at: Vector3<f32>, nearness: f32) {
+        if !nearness.is_finite() || !at.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let eagerness = self.eagerness(tuning);
+        self.wariness.note(&tuning.alert, Incident::Heard);
+        if self.detection.hear(&tuning.detection, nearness, eagerness) == Some(Change::Noticed) && self.alert.is_none() {
+            self.investigation.get_or_insert(Investigation::new(&tuning.investigate, at));
+            self.happened.push(Happened::Noticed);
+        }
+    }
+
+    /// There is no way to where it was going: it gives it up - an investigation, as if done; a
+    /// search spot, for another; a post of its beat, for the next.
+    pub fn no_way(&mut self, tuning: &crate::Tuning) {
+        match self.conduct {
+            Some(Conduct::Investigate) if self.investigation.take().is_some() => self.investigation_done(tuning),
+            _ if !self.beat.is_empty() && self.goal.is_some() && self.alert.is_none() => {
+                self.post = (self.post + 1) % self.beat.len();
+                self.goal = None;
+            }
+            _ => self.goal = None,
+        }
+    }
+
+    fn eagerness(&self, tuning: &crate::Tuning) -> f32 {
+        let searching = if self.alert == Some(Alert::Evasion) { tuning.detection.searching } else { 1.0 };
+        self.wariness.keenness(&tuning.alert) * searching
+    }
+
+    fn investigation_done(&mut self, tuning: &crate::Tuning) {
+        self.happened.push(Happened::InvestigationDone);
+        self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Investigation));
+    }
+
+    fn lost_at(&mut self, tuning: &crate::Tuning, search: &mut SearchMap, mesh: &NavMesh, at: Vector3<f32>, going: Option<Vector3<f32>>) {
+        self.left = self.wariness.lasts(&tuning.alert, Alert::Evasion).unwrap_or_default();
+        self.goal = None;
+        self.look = None;
+        search.lose(mesh, at, going);
+    }
+
+    /// Takes in what it senses this frame: awareness, the alert phase, and anything it was told.
+    /// `relayed`: it sees another sentry after the player, and so knows where they are as if it
+    /// saw them itself - it stays on the chase as long as it does.
+    fn perceive(&mut self, tuning: &crate::Tuning, senses: &Senses, relayed: bool, search: &mut SearchMap, mesh: &NavMesh, dt: f32) {
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        if senses.feet.iter().all(|v| v.is_finite()) {
+            self.feet = senses.feet;
+        }
+        if senses.heading.is_finite() {
+            self.heading = senses.heading;
+        }
+        let player_known = senses.player.iter().all(|v| v.is_finite());
+        let visible = if senses.visible.is_finite() && player_known { senses.visible.max(0.0) } else { 0.0 };
+        self.wariness.step(&tuning.alert, dt);
+        let eagerness = self.eagerness(tuning);
+        let change = self.detection.step(&tuning.detection, visible, eagerness, dt);
+        let sees = match self.alert {
+            Some(Alert::Alert) => visible > 0.0 || relayed && player_known,
+            _ => self.detection.spotted() && visible > 0.0,
+        };
+        match change {
+            Some(Change::Noticed) if self.alert.is_none() => {
+                self.happened.push(Happened::Noticed);
+                self.wariness.note(&tuning.alert, Incident::Noticed);
+                self.investigation.get_or_insert(Investigation::new(&tuning.investigate, senses.player));
+            }
+            Some(Change::Spotted) if self.alert.is_none() => {
+                self.happened.push(Happened::Spotted);
+                self.wariness.note(&tuning.alert, Incident::Spotted);
+                self.investigation = None;
+                self.alert = Some(Alert::Alert);
+                self.goal = None;
+                self.look = None;
+            }
+            _ if visible > 0.0 => {
+                if let Some(look) = self.investigation.as_mut() {
+                    look.saw_again(&tuning.investigate, senses.player);
+                }
+            }
+            _ => (),
+        }
+        if sees {
+            if let Some(was) = self.last_seen {
+                // Which way they are going, from how they have moved lately.
+                self.going = self.going * (-4.0 * dt).exp() + flat(senses.player - was);
+            }
+            self.last_seen = Some(senses.player);
+        }
+        // Told where to look: it searches there.
+        if let Some(there) = self.told.take().filter(|_| self.alert != Some(Alert::Alert)) {
+            self.wariness.note(&tuning.alert, Incident::Alarm);
+            self.alert = Some(Alert::Evasion);
+            self.last_seen = Some(there);
+            self.going = Vector3::zeros();
+            self.investigation = None;
+            self.lost_at(tuning, search, mesh, there, None);
+            self.happened.push(Happened::Told);
+        }
+        // The phases.
+        if let Some(phase) = self.alert {
+            if phase != Alert::Alert {
+                self.left -= dt;
+            }
+            let next = phase.next(sees, self.left);
+            match (phase, next) {
+                (Alert::Alert, Some(Alert::Evasion)) => {
+                    self.happened.push(Happened::LostContact);
+                    self.wariness.note(&tuning.alert, Incident::Lost);
+                    let at = self.last_seen.unwrap_or(self.feet);
+                    let going = (self.going.norm() > 1.0e-3).then_some(self.going);
+                    self.lost_at(tuning, search, mesh, at, going);
+                    self.experience.report(tuning, Some(mesh), Outcome::failed(Venture::Pursuit).at(at));
+                }
+                (Alert::Evasion | Alert::Caution, Some(Alert::Alert)) => {
+                    self.happened.push(Happened::FoundAgain);
+                    self.goal = None;
+                    self.look = None;
+                    if phase == Alert::Evasion {
+                        self.experience.report(tuning, Some(mesh), Outcome::succeeded(Venture::Search).at(senses.player));
+                    }
+                }
+                (Alert::Evasion, Some(Alert::Caution)) => {
+                    self.happened.push(Happened::GaveUp);
+                    self.left = self.wariness.lasts(&tuning.alert, Alert::Caution).unwrap_or_default();
+                    self.goal = None;
+                    self.look = None;
+                    self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Search));
+                }
+                (Alert::Caution, None) => {
+                    self.happened.push(Happened::Calm);
+                    self.detection.reset();
+                    self.last_seen = None;
+                    self.going = Vector3::zeros();
+                    self.goal = None;
+                }
+                _ => (),
+            }
+            self.alert = next;
+        }
+        self.experience.step(tuning, dt);
+    }
+
+    /// It saw another sentry after the player, at `player`, and joins in.
+    fn join(&mut self, player: Vector3<f32>) {
+        self.alert = Some(Alert::Alert);
+        self.detection.alert();
+        self.investigation = None;
+        self.last_seen = Some(player);
+        self.goal = None;
+        self.look = None;
+        self.happened.push(Happened::Joined);
+    }
+
+    /// Chooses what to do, and what that means it does this frame.
+    fn decide(&mut self, tuning: &crate::Tuning, reasoners: &mut Reasoners, search: &SearchMap, mesh: &NavMesh, taken: &[Vector3<f32>], dt: f32) -> (Intent, Conduct) {
+        let t = &tuning.orchestrate;
+        let reading = Reading {
+            hunting: self.alert == Some(Alert::Alert),
+            investigating: self.investigation.is_some() && self.alert != Some(Alert::Alert),
+            searching: self.alert == Some(Alert::Evasion),
+            nerve: self.nerve,
+            wariness: self.wariness.level,
+            ..Reading::default()
+        };
+        let conduct = self.experience.choose(tuning, reasoners, self.role, &reading, self.conduct);
+        if self.conduct != Some(conduct) {
+            self.goal = None;
+            self.look = None;
+        }
+        self.conduct = Some(conduct);
+        let there = |goal: Vector3<f32>, feet: Vector3<f32>| flat(goal - feet).norm() <= t.arrived;
+        let intent = match conduct {
+            Conduct::Chase => Intent::GoTo { at: self.last_seen.unwrap_or(self.feet), pace: Pace::Run },
+            Conduct::Investigate => match self.investigation.take() {
+                Some(mut look) => match look.step(&tuning.investigate, self.feet, self.heading, dt) {
+                    Doing::Face { heading } | Doing::LookAround { heading } => {
+                        self.investigation = Some(look);
+                        Intent::Face { heading }
+                    }
+                    Doing::GoTo { at, .. } => {
+                        self.investigation = Some(look);
+                        Intent::GoTo { at, pace: Pace::Walk }
+                    }
+                    Doing::Done => {
+                        self.investigation_done(tuning);
+                        Intent::Face { heading: self.heading }
+                    }
+                },
+                None => Intent::Routine,
+            },
+            Conduct::Search => {
+                if let Some(heading) = self.look.as_mut().and_then(|look| look.step(dt)) {
+                    Intent::Face { heading }
+                } else {
+                    self.look = None;
+                    if self.goal.is_some_and(|goal| there(goal, self.feet)) {
+                        // Got there: it looks about.
+                        self.goal = None;
+                        self.look = Some(LookAbout::searching(&tuning.search, self.heading));
+                        Intent::Face { heading: self.heading }
+                    } else {
+                        if self.goal.is_none() {
+                            self.goal = (!search.is_empty()).then(|| search.best(mesh, self.feet, taken, t.apart, t.within)).flatten();
+                        }
+                        match self.goal {
+                            Some(at) => Intent::GoTo { at, pace: Pace::Search },
+                            // Nowhere likelier than where it is: it looks about here.
+                            None => {
+                                self.look = Some(LookAbout::searching(&tuning.search, self.heading));
+                                Intent::Face { heading: self.heading }
+                            }
+                        }
+                    }
+                }
+            }
+            _ if self.beat.is_empty() => Intent::Routine,
+            _ => {
+                let post = self.beat[self.post % self.beat.len()];
+                if there(post, self.feet) {
+                    self.post = (self.post + 1) % self.beat.len();
+                }
+                let post = self.beat[self.post];
+                self.goal = Some(post);
+                Intent::GoTo { at: post, pace: Pace::Walk }
+            }
+        };
+        (intent, conduct)
+    }
+}
+
+/// What a squad of sentries shares: the search map they search by - one hunt at a time, the last
+/// sentry to lose the player or be told where they are setting it afresh - and the clock it is
+/// looked over by.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Squad {
+    pub search: SearchMap,
+    look_in: f32,
+}
+
+impl Squad {
+    /// No one lost yet.
+    pub fn new(tuning: &crate::Tuning) -> Self {
+        Self { search: SearchMap::with(tuning.search), look_in: 0.0 }
+    }
+
+    /// A noise at `at`, carrying `loudness` meters along the floor of `mesh`: each of `sentries`
+    /// that hears it hears it (see [`Sentry::hear`]), by where it stood last frame.
+    pub fn noise(&self, tuning: &crate::Tuning, mesh: &NavMesh, sentries: &mut [Sentry], at: Vector3<f32>, loudness: f32) {
+        if !loudness.is_finite() || loudness <= 0.0 {
+            return;
+        }
+        let Some(heard) = Heard::at(mesh, at, loudness) else { return };
+        for sentry in sentries {
+            if let Some(nearness) = heard.nearness(mesh, sentry.feet) {
+                sentry.hear(tuning, at, nearness);
+            }
+        }
+    }
+
+    /// Moves the squad on `dt` seconds: each of `sentries` takes in what `senses` says it does -
+    /// the one by the other, any left over on either side left out - those that see another after
+    /// the player join in (`seeing`: what there is to see by; `clear(a, b)`: whether nothing is in
+    /// the way from sentry `a` to `b`, the game's ray), the search map spreads and is looked over,
+    /// and each chooses what to do. A [`Thought`] for each sentry that had senses, in order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step(
+        &mut self,
+        tuning: &crate::Tuning,
+        mesh: &NavMesh,
+        reasoners: &mut Reasoners,
+        sentries: &mut [Sentry],
+        senses: &[Senses],
+        seeing: impl Into<Seeing>,
+        clear: impl Fn(usize, usize) -> bool,
+        dt: f32,
+    ) -> Vec<Thought> {
+        let seeing = seeing.into();
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        let n = sentries.len().min(senses.len());
+        let (sentries, senses) = (&mut sentries[..n], &senses[..n]);
+        // Joining in a chase it sees: each sentry that sees another after the player - that can
+        // see them - knows where they are through it, as if it saw them itself. One not after them
+        // yet joins in; one already after them stays after them as long as it sees the chase,
+        // rather than losing them the frame it joins and joining again the next.
+        let watches: Vec<Watch> = sentries
+            .iter()
+            .zip(senses)
+            .map(|(s, sense)| Watch {
+                sentry: s.role == Role::Sentry,
+                alert: s.alert,
+                sees_player: s.alert == Some(Alert::Alert) && sense.visible.is_finite() && sense.visible > 0.0,
+                busy: false,
+                windup: 0.0,
+                feet: if sense.feet.iter().all(|v| v.is_finite()) { sense.feet } else { s.feet },
+                heading: if sense.heading.is_finite() { sense.heading } else { s.heading },
+            })
+            .collect();
+        let mut relayed = vec![false; n];
+        for joiner in joiners(&watches, seeing, &clear) {
+            relayed[joiner] = true;
+            if sentries[joiner].alert != Some(Alert::Alert) && senses[joiner].player.iter().all(|v| v.is_finite()) {
+                sentries[joiner].join(senses[joiner].player);
+            }
+        }
+        for ((sentry, sense), &relayed) in sentries.iter_mut().zip(senses).zip(&relayed) {
+            sentry.perceive(tuning, sense, relayed, &mut self.search, mesh, dt);
+        }
+        // The search: where the player could be spreading as fast as they could go, cleared where
+        // the searchers look and do not see them - on a clock of its own, as often at any frame rate.
+        let o = &tuning.orchestrate;
+        if sentries.iter().any(|s| s.alert == Some(Alert::Evasion)) && !self.search.is_empty() {
+            self.search.spread(mesh, o.getaway * dt);
+            self.look_in -= dt;
+            let reach = tuning.sight.reach(Some(Alert::Evasion), Stance::Standing, seeing.dark).min(o.search_sight);
+            while self.look_in <= 0.0 {
+                self.look_in += o.look_every.max(1.0e-3);
+                for s in sentries.iter().filter(|s| s.alert == Some(Alert::Evasion)) {
+                    self.search.look(mesh, s.feet, s.heading, (reach, tuning.sight.cone, 2.0));
+                }
+            }
+        } else {
+            self.look_in = 0.0;
+        }
+        // Each chooses what to do - searchers clear of where the others are going, including where
+        // those that chose before it this frame have just set off for.
+        let mut goals: Vec<Option<Vector3<f32>>> = sentries.iter().map(|s| s.goal.filter(|_| s.alert == Some(Alert::Evasion))).collect();
+        let mut taken = Vec::new();
+        let mut thoughts = Vec::with_capacity(n);
+        for (i, sentry) in sentries.iter_mut().enumerate() {
+            taken.clear();
+            taken.extend(goals.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, g)| *g));
+            let (intent, conduct) = sentry.decide(tuning, reasoners, &self.search, mesh, &taken, dt);
+            goals[i] = sentry.goal.filter(|_| sentry.alert == Some(Alert::Evasion));
+            thoughts.push(Thought { intent, conduct, happened: std::mem::take(&mut sentry.happened) });
+        }
+        thoughts
+    }
+}

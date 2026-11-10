@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 38] = [
+        let modules: [(&str, Vec<(String, f64)>); 39] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -270,6 +270,7 @@ impl Tuning {
             ("lesson", self.lesson.numbers()),
             ("habit", self.habit.numbers()),
             ("haunt", self.haunt.numbers()),
+            ("orchestrate", self.orchestrate.numbers()),
         ];
         for (module, numbers) in modules {
             c.numbers(module, numbers);
@@ -282,7 +283,7 @@ impl Tuning {
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
                     "cover", "team", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
-                    "passing", "lesson", "habit", "haunt",
+                    "passing", "lesson", "habit", "haunt", "orchestrate",
                 ]
                 .map(String::from),
             )
@@ -474,6 +475,11 @@ impl Tuning {
         c.positive("haunt.sure", haunt.sure);
         c.fraction("haunt.told", haunt.told);
         c.some("haunt.most", haunt.most as f64);
+
+        let o = &self.orchestrate;
+        c.positive("orchestrate.arrived", o.arrived);
+        c.positive("orchestrate.look_every", o.look_every);
+        c.positive("orchestrate.within", o.within);
     }
 }
 

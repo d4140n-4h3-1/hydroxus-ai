@@ -7,6 +7,11 @@
 //!   of them sent to search.
 //! - **flight**: 2,000 routes through the air across a block of 40 buildings, each looked for
 //!   with a ray-box test - straight there, over a building, or along the floor.
+//! - **orchestrated**: squads of 10, 50, 100 and 250 sentries run by `orchestrate::Squad` for a
+//!   minute at 60 a second, on a 160 m square of rooms and doorways, the player walking a loop
+//!   through them - spotted, chased, lost, searched for. Only `Squad::step` is timed: the senses
+//!   (a sight-line along the floor and `Sight::visibility`) and moving the bodies straight to
+//!   where they are going are the game's, done outside the timer.
 use hydroxus_ai::{
     navigation::{
         flight,
@@ -15,6 +20,14 @@ use hydroxus_ai::{
     },
     tactics::patrol::{self, Patrol, Speeds},
 };
+use hydroxus_ai::{
+    flat,
+    navigation::{grid::WalkGrid, navmesh::NavMesh},
+    orchestrate::{Intent, Pace, Senses, Sentry, Squad},
+    perception::sight::{Sight, Stance},
+    tactics::conduct::{Reasoners, Role},
+    Tuning,
+};
 use nalgebra::Vector3;
 use std::{hint::black_box, time::Instant};
 
@@ -22,6 +35,95 @@ fn main() {
     traffic();
     patrols();
     flights();
+    orchestrated();
+}
+
+fn orchestrated() {
+    const SIDE: usize = 160;
+    let mut grid = WalkGrid::new(SIDE, SIDE, 1.0);
+    for z in 0..SIDE {
+        for x in 0..SIDE {
+            let (rx, rz) = (x % 20, z % 20);
+            let wall = (rx == 19 && !(8..12).contains(&rz)) || (rz == 19 && !(8..12).contains(&rx));
+            grid.set(x, z, !wall);
+        }
+    }
+    let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
+    let ai = Tuning::DEFAULT;
+    // The player's loop: round the middle of the level, through the doorways.
+    let lap = [(10.0, 10.0), (150.0, 10.0), (150.0, 150.0), (10.0, 150.0)].map(|(x, z)| Vector3::new(x, 0.0, z));
+    for count in [10, 50, 100, 250] {
+        let mut rng = Rng::new(count as u64);
+        let mut squad = Squad::new(&ai);
+        let mut reasoners = Reasoners::default();
+        let mut sentries: Vec<Sentry> = (0..count).map(|_| Sentry::new(Role::Sentry)).collect();
+        let mut bodies: Vec<(Vector3<f32>, f32)> = (0..count)
+            .map(|_| {
+                let room = |r: usize| (r * 20 + 10) as f32;
+                (Vector3::new(room(rng.below(8)) + rng.below(9) as f32 - 4.0, 0.0, room(rng.below(8)) + rng.below(9) as f32 - 4.0), rng.below(628) as f32 / 100.0)
+            })
+            .collect();
+        let (mut player, mut leg) = (lap[0], 1);
+        let (mut total, mut worst, mut frames) = (0.0f64, 0.0f64, 0);
+        let (mut spotted, mut searching) = (0, 0);
+        let dt: f32 = 1.0 / 60.0;
+        for _ in 0..3600 {
+            // The player walks the loop.
+            let to = flat(lap[leg] - player);
+            if to.norm() < 0.1 {
+                leg = (leg + 1) % lap.len();
+            } else {
+                player += to / to.norm() * (3.0 * dt).min(to.norm());
+            }
+            let senses: Vec<Senses> = bodies
+                .iter()
+                .zip(&sentries)
+                .map(|(&(feet, heading), s)| {
+                    let near = flat(player - feet).norm() < 35.0;
+                    let visible = if near && mesh.sees_across(feet, player) {
+                        Sight::DEFAULT.visibility(s.alert(), feet, heading, player, Stance::Standing, false)
+                    } else {
+                        0.0
+                    };
+                    Senses { feet, heading, visible, player }
+                })
+                .collect();
+            let t = Instant::now();
+            let thoughts = squad.step(&ai, &mesh, &mut reasoners, &mut sentries, black_box(&senses), false, |a, b| flat(bodies[a].0 - bodies[b].0).norm() < 30.0, dt);
+            let took = t.elapsed().as_secs_f64() * 1e3;
+            total += took;
+            worst = worst.max(took);
+            frames += 1;
+            for (body, thought) in bodies.iter_mut().zip(&thoughts) {
+                match thought.intent {
+                    Intent::GoTo { at, pace } => {
+                        let speed = match pace {
+                            Pace::Walk => 1.5,
+                            Pace::Search => 2.5,
+                            Pace::Run => 4.0,
+                        };
+                        let to = flat(at - body.0);
+                        if to.norm() > 1.0e-3 {
+                            body.1 = to.x.atan2(to.z);
+                            body.0 += to / to.norm() * (speed * dt).min(to.norm());
+                        }
+                    }
+                    Intent::Face { heading } => body.1 = heading,
+                    Intent::Routine => (),
+                }
+            }
+            spotted += sentries.iter().filter(|s| s.alert() == Some(hydroxus_ai::alert::Alert::Alert)).count();
+            searching += sentries.iter().filter(|s| s.alert() == Some(hydroxus_ai::alert::Alert::Evasion)).count();
+        }
+        println!(
+            "orchestrated: {count} sentries, a frame {:.4} ms (worst {:.3} ms), {:.4} ms a sentry; on average {:.1} chasing and {:.1} searching",
+            total / frames as f64,
+            worst,
+            total / frames as f64 / count as f64,
+            spotted as f64 / frames as f64,
+            searching as f64 / frames as f64
+        );
+    }
 }
 
 /// The time each of `runs` takes, as `(mean, worst)` in milliseconds.

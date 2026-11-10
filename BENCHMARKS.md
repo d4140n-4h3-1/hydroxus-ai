@@ -128,6 +128,25 @@ the lookups (to 15 ms). Moving the panic out of line (`#[cold]`) and having `wal
 the cells directly brought those back. Lookups happen only while surveying a level at load; the
 navmesh is the only ground at runtime.
 
+## The orchestration layer (2026-11-10, milestone 2.1)
+
+`ai_bench`'s new **orchestrated** section: squads of sentries run by `orchestrate::Squad` for 3,600
+frames (a minute at 60 Hz) on a 160 m square of 64 rooms joined by doorways, the player walking a
+loop through them. Only `Squad::step` is timed. Two runs:
+
+| Sentries | A frame, mean | Worst frame | A sentry, mean | Chasing / searching on average |
+|----------|---------------|-------------|----------------|--------------------------------|
+| 10 | 0.0020–0.0023 ms | 0.19–0.22 ms | 0.0002 ms | 0.7 / 0.2 |
+| 50 | 0.012–0.014 ms | 0.49–0.59 ms | 0.0002–0.0003 ms | 4.9 / 0.2 |
+| 100 | 0.027–0.031 ms | 0.44–0.51 ms | 0.0003 ms | 4.4 / 0.2 |
+| 250 | 0.150–0.166 ms | 4.0–4.5 ms | 0.0006–0.0007 ms | 48.1 / 0.4 |
+
+The first measurement, before the join flicker was fixed, was 0.44 ms a frame at 250: sentries
+flipping between chasing and searching every frame cost three times as much. Where the worst
+frames' few milliseconds go is not yet profiled; losing the player (a new search map, walked out
+to 250 m) and searchers choosing where to go (a cost map out to 100 m each) are the likely
+candidates.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide

@@ -26,6 +26,7 @@
 //!   [`social::faction`]), what becomes of their own ([`social::ties`]), the trouble they keep
 //!   away from ([`social::trouble`]), how they take the player passing ([`social::passing`]), and
 //!   a city's crowd ([`social::crowd`]).
+//! - [`orchestrate`]: optional - the modules run together as a guard's mind and a squad's: perceive, investigate, chase, search, join in, back to routine.
 //! - [`validate`]: checking a [`Tuning`] before it is used - every number, and the ones that contradict each other.
 //! - [`think`]: learning and adapting - what has worked for an NPC and what has not
 //!   ([`think::lesson`]), what the player tends to do ([`think::habit`]), and where they keep
@@ -82,6 +83,7 @@ macro_rules! tuning {
 
 pub mod alert;
 pub mod navigation;
+pub mod orchestrate;
 pub mod perception;
 pub mod social;
 pub mod tactics;
@@ -220,6 +222,8 @@ pub struct Tuning {
     pub habit: crate::think::habit::Tuning,
     /// Learning where the player turns up.
     pub haunt: crate::think::haunt::Tuning,
+    /// Running the modules together, optionally (see [`orchestrate`]).
+    pub orchestrate: crate::orchestrate::Tuning,
 }
 
 impl Tuning {
@@ -264,6 +268,7 @@ impl Tuning {
         lesson: crate::think::lesson::Tuning::DEFAULT,
         habit: crate::think::habit::Tuning::DEFAULT,
         haunt: crate::think::haunt::Tuning::DEFAULT,
+        orchestrate: crate::orchestrate::Tuning::DEFAULT,
     };
 }
 

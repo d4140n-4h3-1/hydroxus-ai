@@ -264,6 +264,32 @@ for verdict in experience.report(&tuning, Some(&mesh), Outcome::came_to_nothing(
 
 **Where the player turns up** (`think::haunt`). `Haunts` keeps where the player was seen (`seen_at`) and found hiding (`found_at`, counting 3×), by navmesh cell, so haunts survive doors opening and shutting. Report the moments that matter, such as spotted, lost or found, not every frame. Once the player is lost, `haunts.lean(tuning, mesh, &mut map)` after `SearchMap::lose` weighs each polygon by the haunts within 4 m of it, up to twice as likely. It only reweighs where they could be, never adds chance where they could not have got to. `likeliest(mesh)` gives a patrol somewhere to go by. At most 64 haunts are kept, and each fades halfway in 30 minutes.
 
+## Orchestration (optional, `orchestrate`)
+
+The per-frame loop above, written once. A `Sentry` per NPC and one `Squad` for those that hunt together:
+
+```rust
+let mut squad = Squad::new(&AI);
+let mut sentries = vec![Sentry::new(Role::Sentry).with_beat(vec![a, b]), Sentry::new(Role::Sentry)];
+// each frame:
+let senses: Vec<Senses> = /* feet, heading, visible (Sight::visibility, 0 if your ray is blocked), player */;
+for (n, thought) in squad.step(&AI, &mesh, &mut reasoners, &mut sentries, &senses, seeing, |a, b| clear(a, b), dt).into_iter().enumerate() {
+    match thought.intent {
+        Intent::Routine => { /* your own routine */ }
+        Intent::GoTo { at, pace } => { /* route there if not already; walk, hurry or run */ }
+        Intent::Face { heading } => { /* stand and turn */ }
+    }
+    for happened in thought.happened { /* Spotted, LostContact, Joined, GaveUp, Calm, ... : bark, sound, HUD */ }
+}
+squad.noise(&AI, &mesh, &mut sentries, at, loudness);   // a noise
+sentries[n].tell(at);                                    // a witness, a radio call
+sentries[n].no_way(&AI);                                 // your router found no way to its GoTo
+```
+
+What it does for you: awareness from what each sentry sees, and what it hears; noticing something leads to an investigation (`Pace::Walk`). Spotting leads to Alert and a chase (`Pace::Run`). Losing them sets the squad's search map going where they were last seen, heading the way they were going; it spreads at `orchestrate.getaway` (4 m/s) and is looked over every `look_every` (0.25 s), out to `search_sight` (16 m). Each searcher goes to the likeliest place no one else is heading for (at least `apart`, 4 m, from the others) at `Pace::Search`, and looks about there (`LookAbout`). Then come Caution and calm, with wariness stretching each phase. A sentry that sees another chasing joins in, and stays on the chase while it can see it. Conduct is chosen by the role's utility reasoner, weighed by each sentry's `Experience`, which it reports outcomes to itself. Its routine is yours (`Intent::Routine`) or a beat (`with_beat`).
+
+Costs, from `examples/ai_bench.rs` on a Ryzen 9 5900X: 100 sentries 0.03 ms a frame, 250 sentries 0.15–0.17 ms (worst frame about 4 ms, not yet profiled). `Sentry` and `Squad` save with `serde`.
+
 ## Integrating with a game
 
 Ruptura Systematis is the reference integration: `src/inhabitants.rs` holds every droid's AI state and steps it, and `src/game.rs` turns what comes back into lines, sounds and notes.

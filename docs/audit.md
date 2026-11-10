@@ -26,8 +26,8 @@ Nothing was consolidated just to have fewer files.
 | Finding | Action |
 |---------|--------|
 | A searcher's look-about on arrival (above). | **Fixed:** `LookAbout`. |
-| An NPC's alert phase is three loose values a game must step together: `Alert`, the seconds left, and `Wariness::lasts` on every change of phase. Maze and the scenario harness both write the same bookkeeping. | **Recommended for 2.1**, as part of the orchestration layer, not bolted onto `alert` now. |
-| The search map is looked over on a clock the game keeps (Maze's `LOOK_EVERY`, the harness's). | **Recommended for 2.1**, with the above. |
+| An NPC's alert phase is three loose values a game must step together: `Alert`, the seconds left, and `Wariness::lasts` on every change of phase. Maze and the scenario harness both write the same bookkeeping. | **Recommended for 2.1**, as part of the orchestration layer, not bolted onto `alert` now. Done in 2.1: `orchestrate::Sentry`. |
+| The search map is looked over on a clock the game keeps (Maze's `LOOK_EVERY`, the harness's). | **Recommended for 2.1**, with the above. Done in 2.1: `orchestrate::Squad`. |
 | Per-NPC state could not be saved. `think` and `social` derive `serde`, but `Detection`, `Wariness`, `Alert`, `Investigation`, `SearchMap`, `Witness`, `Unease`, `Mourning` and `BlindFire` did not, so a game could not save a guard mid-search. | **Fixed:** `serde` derives behind the existing feature. `tests/persistence.rs` saves a guard 1.5 s into an incident, loads it, and runs original and copy side by side for 1,800 frames: exactly equal, the search maps within 1e-5. Their chances are summed in hash-map order, which a loaded map does not share. |
 
 ## Ownership and borrowing

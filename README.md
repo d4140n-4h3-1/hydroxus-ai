@@ -97,6 +97,17 @@ let behind = nalgebra::Vector3::new(0.0, 0.0, -10.0);
 assert!(!sight.could_see(Some(Alert::Evasion), nalgebra::Vector3::zeros(), 0.0, behind, Stance::Crouching, false));
 ```
 
+## Orchestration, optional
+
+`orchestrate` runs the modules together, so a game need not write the glue: a `Sentry` is one
+guard's mind (awareness, alert phase, investigation, chase, search, what it has learned) and a
+`Squad` is what sentries share (the search map and its clock, joining a chase they see, splitting
+up to search). Each frame the game hands `Squad::step` what each sentry senses (where it stands,
+how visible the player is), and gets back for each an `Intent` (its routine, go somewhere at a
+pace, or face a way) and what happened (`Spotted`, `LostContact`, `GaveUp`, ...). The game still
+casts the rays, routes and moves the bodies. Nothing else in the crate depends on it; use it, or
+wire the modules yourself. `cargo run --example guard` shows the whole loop in about 100 lines.
+
 ## Tuning
 
 Every number the crate's behaviour turns on - how far an NPC sees, how long it searches, how
