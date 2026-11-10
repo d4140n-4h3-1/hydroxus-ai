@@ -14,7 +14,10 @@
 //!   way they come in, the trick they use - and how sure an NPC can be of what they will do next.
 //! - [`haunt`]: where the player keeps turning up: the places they were seen and found, for a
 //!   search to look first and a patrol to go by.
+//! - [`experience`]: what an NPC has been through: one place for a game to say how what it did
+//!   turned out, taken to its lessons, the player's habits and haunts, and weighing what it does.
 
+pub mod experience;
 pub mod habit;
 pub mod haunt;
 pub mod lesson;

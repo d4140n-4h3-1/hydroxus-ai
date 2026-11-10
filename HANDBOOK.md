@@ -15,7 +15,7 @@ It was built for Ruptura Systematis: stealth droids that hunt the player through
 | `tactics` | What it does about it: chase, search, investigate, shoot, take cover, fight as a team, patrol, and which of these to do | `utility`, `conduct`, `search`, `investigate`, `chase`, `pace`, `threat`, `fire`, `blind`, `cover`, `team`, `patrol` |
 | `navigation` | How it gets about: the navmesh, routes, walking, ferries, trains, wandering a city, making way, driving, flying | `navmesh`, `walk`, `trip`, `ride`, `wander`, `steer`, `drive`, `traffic`, `flight` |
 | `social` | NPCs among each other: groups, talk, reports, opinions, rumours, factions, ties, trouble, passing the player, the crowd | `group`, `talk`, `report`, `opinion`, `rumour`, `faction`, `chat`, `ties`, `trouble`, `passing`, `crowd` |
-| `think` | What it learns and how it adapts: what has worked for it, the player's habits, where the player hides | `lesson`, `habit`, `haunt` |
+| `think` | What it learns and how it adapts: what has worked for it, the player's habits, where the player hides | `lesson`, `habit`, `haunt`, `experience` |
 
 ## Getting started
 
@@ -239,6 +239,18 @@ let conduct = lessons.choose(&tuning.lesson, reasoners.of(role), &reading, curre
 lessons.learn(&tuning.lesson, Conduct::Search, if found { 1.0 } else { -0.5 });
 ```
 
+Once what it makes of an action passes `sure` (0.5) either way, it has come to a `View` of it: `Works` or `Fails`. `learn`, `tell` and `step` give back a `Verdict` whenever that changes, for the game to say out loud ("Chasing them is no use, search the alleys") or to pass to the squad. It gives a view up only once it falls back under half of `sure`, so it does not flip back and forth.
+
+An outcome is seldom down to what the NPC is doing that moment: a search finds the player because the chase before it kept them in sight. A `Trail<A>` keeps the last 8 things it did. `trail.turned_out(tuning, &mut lessons, outcome, down_to)` credits each one the outcome is `down_to`: what it is doing in full, and what it gave up `credit` (10 s) ago at half. The game only has to say how things went, not when it chose what.
+
+**All of it at once** (`think::experience`). `Experience<T>` is one NPC's lessons, trail, habits and haunts together. `choose(…)` picks its conduct, weighed by what it learned, and notes it on the trail. `held()` marks it as held to something it did not choose. `report(tuning, mesh, outcome)` takes an `Outcome`: the `Venture` it was on (Investigation, Pursuit, Defence, Cooperation, Search), how it went (`succeeded`, `failed`, `came_to_nothing` = −0.5, `partly(share)`), and optionally where the player was and what they did. That goes to the conducts the venture `covers` on the trail, to its haunts (found, counting 3×, or seen), and to its habits. With `sway` at 0 it chooses exactly as the reasoner alone would.
+
+```rust
+let conduct = experience.choose(&tuning, &mut reasoners, role, &reading, current);
+// …a search turned up nothing:
+for verdict in experience.report(&tuning, Some(&mesh), Outcome::came_to_nothing(Venture::Search)) { /* say it */ }
+```
+
 **The player's habits** (`think::habit`). `Habits<T>` counts what the player does, by the game's own enum (the way they come in, how they deal with a guard): `saw(what)` each time. `share(what)` is how much of what they do it is, `sureness()` how far to go by it (a half after 4 sightings), and `expect(what)`, both in one from 0 to 1, is made to be a utility input: a guard that has seen the player come over the roofs again and again watches the roofs. It fades halfway in 15 minutes.
 
 **Where the player turns up** (`think::haunt`). `Haunts` keeps where the player was seen (`seen_at`) and found hiding (`found_at`, counting 3×), by navmesh cell, so haunts survive doors opening and shutting. Report the moments that matter, such as spotted, lost or found, not every frame. Once the player is lost, `haunts.lean(tuning, mesh, &mut map)` after `SearchMap::lose` weighs each polygon by the haunts within 4 m of it, up to twice as likely. It only reweighs where they could be, never adds chance where they could not have got to. `likeliest(mesh)` gives a patrol somewhere to go by. At most 64 haunts are kept, and each fades halfway in 30 minutes.
@@ -282,7 +294,8 @@ The types a game touches most, and what to call on them each frame.
 | `NavMesh` | `navigation::navmesh` | `build`, `set_walkable`, `sync`, `route` | a route of points, last first |
 | `Minds` | `social::rumour` | `saw_done`, `tell`, `came_across`, `step(dt)` | regard, rumours, faction changes |
 | `Mourning` | `social::ties` | `step(tuning, feet, dt)` | `Doing`: GoTo, Kneel, Done |
-| `Lessons<A>` | `think::lesson` | `choose(…)`, `learn(action, outcome)`, `tell`, `step(dt)` | the action to do, weighed by what worked |
+| `Lessons<A>` | `think::lesson` | `choose(…)`, `learn(action, outcome)`, `tell`, `step(dt)` | the action to do, weighed by what worked; `Verdict`s when it changes its mind |
+| `Experience<T>` | `think::experience` | `choose(…)`, `held`, `report(…, outcome)`, `tell`, `step(dt)` | conduct weighed by its own history; `Verdict`s |
 | `Habits<T>` | `think::habit` | `saw(what)`, `expect(what)`, `likeliest()`, `step(dt)` | how much the player is expected to do it |
 | `Haunts` | `think::haunt` | `seen_at`, `found_at`, `lean(…, &mut map)`, `likeliest`, `step(dt)` | a search leaned on where they hide |
 | `Passing` | `social::passing` | `gesture(…)`, `ready`, `did`, `step` | Greet, Tip, Nod, Avoid or Glare |
