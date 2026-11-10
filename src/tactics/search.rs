@@ -33,6 +33,10 @@ pub const AHEAD_BY: f32 = 4.0;
 pub const HALVED_AFTER: f32 = 20.0;
 /// How far from where they were lost, in meters of walking, the map follows them at most.
 pub const FOLLOWED: f32 = 250.0;
+/// How long a searcher looks about each spot it gets to, in seconds, and how far either way it
+/// turns, in radians (see [`crate::tactics::look::LookAbout::searching`]).
+pub const LOOK_ABOUT: f32 = 3.0;
+pub const LOOK_SWEEP: f32 = 70.0 * std::f32::consts::PI / 180.0;
 
 tuning!(
     /// How a search map spreads and is weighed (see the module's constants, its defaults).
@@ -47,12 +51,17 @@ tuning!(
         halved_after: f32 = HALVED_AFTER,
         /// How far from where they were lost the map follows them, in meters of walking.
         followed: f32 = FOLLOWED,
+        /// How long a searcher looks about each spot it gets to, in seconds, and how far either
+        /// way it turns, in radians.
+        look_about: f32 = LOOK_ABOUT,
+        look_sweep: f32 = LOOK_SWEEP,
     }
 );
 
 /// Where someone lost from sight could be: a chance for every polygon of the navmesh they could
 /// have got to.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SearchMap {
     /// The chance in each polygon with any.
     chance: HashMap<Poly, f32>,

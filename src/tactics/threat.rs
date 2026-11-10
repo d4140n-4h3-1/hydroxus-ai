@@ -64,6 +64,7 @@ pub enum Uneasy {
 
 /// What a weapon drawn near an NPC is doing to it.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Unease {
     /// How long it has seen it, how long since it last did, and how long it has left watching
     /// whoever holds it, in seconds.

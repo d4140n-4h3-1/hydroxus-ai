@@ -136,17 +136,31 @@ impl WalkGrid {
             .filter(|&(x, row)| self.is_walkable(x, row))
     }
 
+    /// The index of cell `(x, z)` - `z` counting every storey's rows - checked to be on the grid:
+    /// an `x` past its edge would otherwise land, quietly, on the next row's cell. (A row past the
+    /// last is caught by the slice's own bounds check.) The panic is kept out of line, so that the
+    /// check is one compare in the survey's and navmesh's innermost loops.
+    #[inline]
+    fn index(&self, x: usize, z: usize) -> usize {
+        if x >= self.width {
+            off_grid(x, z, self.width, self.depth * self.storeys);
+        }
+        z * self.width + x
+    }
+
     pub fn set(&mut self, x: usize, z: usize, walkable: bool) {
-        self.cells[z * self.width + x] = walkable;
+        let at = self.index(x, z);
+        self.cells[at] = walkable;
         self.relink((x, z));
     }
 
     pub fn is_walkable(&self, x: usize, z: usize) -> bool {
-        self.cells[z * self.width + x]
+        self.cells[self.index(x, z)]
     }
 
     pub fn set_floor(&mut self, x: usize, z: usize, height: f32) {
-        self.floors[z * self.width + x] = height;
+        let at = self.index(x, z);
+        self.floors[at] = height;
         self.relink((x, z));
     }
 
@@ -178,7 +192,7 @@ impl WalkGrid {
 
     /// How high the floor is in a cell, in meters.
     pub fn floor(&self, x: usize, z: usize) -> f32 {
-        self.floors[z * self.width + x]
+        self.floors[self.index(x, z)]
     }
 
     /// Whether a step from cell `from` to `to` can be taken: `to` is walkable, and its floor no
@@ -265,9 +279,9 @@ impl WalkGrid {
 
     /// Every walkable cell, on every storey.
     pub fn walkable_cells(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        (0..self.rows())
-            .flat_map(move |z| (0..self.width).map(move |x| (x, z)))
-            .filter(|&(x, z)| self.is_walkable(x, z))
+        // Straight through the cells, in row order: each one on the grid, so no need to ask.
+        let width = self.width.max(1);
+        self.cells.iter().enumerate().filter(|&(_, &walkable)| walkable).map(move |(at, _)| (at % width, at / width))
     }
 
     /// Walking distance, in cells, from `start` to every cell, by its index (`row * width + x`);
@@ -395,6 +409,13 @@ fn ring_of(ring: isize) -> Vec<(isize, isize)> {
 }
 
 /// The middle of cell `(x, z)` of a grid of cells `cell_size` meters across whose corner is at
+/// A cell asked for off the grid: there is no such cell.
+#[cold]
+#[inline(never)]
+fn off_grid(x: usize, z: usize, width: usize, rows: usize) -> ! {
+    panic!("cell ({x}, {z}) is off a {width} by {rows} grid")
+}
+
 /// `origin`, at the corner's height.
 pub fn cell_center(origin: Vector3<f32>, cell_size: f32, x: usize, z: usize) -> Vector3<f32> {
     origin + Vector3::new((x as f32 + 0.5) * cell_size, 0.0, (z as f32 + 0.5) * cell_size)
@@ -419,6 +440,23 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[should_panic(expected = "cell (5, 0) is off a 5 by 3 grid")]
+    fn a_cell_past_the_edge_is_refused_not_put_on_the_next_row() {
+        let mut grid = WalkGrid::new(5, 3, 1.0);
+        grid.set(5, 0, true);
+    }
+
+    #[test]
+    fn every_cell_on_the_grid_is_its_own() {
+        let mut grid = WalkGrid::with_storeys(5, 3, 2, 1.0);
+        grid.set(4, 5, true);
+        grid.set_floor(4, 5, 2.5);
+        assert!(grid.is_walkable(4, 5) && grid.floor(4, 5) == 2.5);
+        assert_eq!(grid.walkable_cells().collect::<Vec<_>>(), vec![(4, 5)]);
+    }
+
     use super::*;
 
     /// A grid of `width` by `depth` on two storeys, its floor walkable but for a scatter of

@@ -107,6 +107,27 @@ with 1. Fewer fights mean less for the AI to think about, so differences of 10â€
 between runs are expected without any change to the code. A fixed-step mode for the benchmark
 would make runs comparable frame for frame (ROADMAP 7.1).
 
+## `examples/grid_bench.rs` (2026-11-10, milestone 1.1)
+
+`cargo run --release --example grid_bench`: a 1,200 by 1,200 cell grid, two storeys (2.9 M cells,
+rooms and doorways), set cell by cell, read back, and built into a navmesh of 23,318 polygons;
+mean of 5 runs. "Before" is 9a561b0, built in a separate worktree with the same benchmark copied in.
+Re-run whenever `WalkGrid` or `NavMesh::build` changes.
+
+| Part | Before | After |
+|------|--------|-------|
+| Survey: `set` + `set_floor` every cell | 18.1 ms | 18.3 ms |
+| `walkable_cells` | 0.7 ms | 0.4 ms |
+| `is_walkable` + `floor`, every cell, from outside | 1.2 ms | 7.6 ms |
+| `NavMesh::build` | 56.3 ms | 58.3 ms (earlier runs of both: 56â€“59 ms) |
+
+The bounds check on a cell's `x` (an `x` past the edge used to land silently on the next row)
+stops the compiler from vectorizing a tight loop of lookups from outside the crate: about 2 ns
+each. The first attempt put the `assert!` inline, which also slowed the survey (to 20.2 ms) and
+the lookups (to 15 ms). Moving the panic out of line (`#[cold]`) and having `walkable_cells` read
+the cells directly brought those back. Lookups happen only while surveying a level at load; the
+navmesh is the only ground at runtime.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide

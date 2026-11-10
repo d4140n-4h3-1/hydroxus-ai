@@ -6,7 +6,7 @@
 //! The game moves the NPC: this says, each step, what it is doing ([`Doing`]) - facing that way,
 //! going there, looking about, or done.
 
-use crate::flat;
+use crate::{flat, tactics::look::LookAbout};
 use nalgebra::Vector3;
 
 /// How long it stands looking that way before it goes over, in seconds; how near there counts as
@@ -44,14 +44,16 @@ pub enum Doing {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 enum Step {
     Pause { left: f32 },
     Going { afresh: bool },
-    Looking { left: f32, from: f32 },
+    Looking(LookAbout),
 }
 
 /// An NPC's investigation of something it noticed.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Investigation {
     /// Where it noticed it, last.
     pub at: Vector3<f32>,
@@ -100,20 +102,20 @@ impl Investigation {
                 Doing::GoTo { at: self.at, afresh: true }
             }
             Step::Going { .. } if to.norm() <= tuning.reach => {
-                self.step = Step::Looking { left: tuning.look_for, from: heading };
+                self.step = Step::Looking(LookAbout::new(heading, tuning.look_for, tuning.sweep));
                 Doing::LookAround { heading }
             }
             Step::Going { afresh } => {
                 self.step = Step::Going { afresh: false };
                 Doing::GoTo { at: self.at, afresh }
             }
-            Step::Looking { left, from } if left > dt => {
-                let left = left - dt;
-                self.step = Step::Looking { left, from };
-                let turn = std::f32::consts::TAU * (tuning.look_for - left) / tuning.look_for.max(1.0e-3);
-                Doing::LookAround { heading: from + tuning.sweep * turn.sin() }
-            }
-            Step::Looking { .. } => Doing::Done,
+            Step::Looking(mut look) => match look.step(dt) {
+                Some(heading) => {
+                    self.step = Step::Looking(look);
+                    Doing::LookAround { heading }
+                }
+                None => Doing::Done,
+            },
         }
     }
 }

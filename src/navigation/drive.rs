@@ -5,7 +5,7 @@
 //! The vehicle's handling is the game's - how it picks up speed, turns and brakes; this says what
 //! the rider does with the controls.
 
-use crate::{flat, forward};
+use crate::{flat, forward, wrap};
 use nalgebra::Vector3;
 
 /// A vehicle as its rider sees it: where it is, which way it points, and how fast it is going.
@@ -59,10 +59,6 @@ pub fn yaw_towards(from: Vector3<f32>, to: Vector3<f32>) -> f32 {
     (to.x - from.x).atan2(to.z - from.z)
 }
 
-/// `angle`, brought round to between -π and π.
-fn wrap(angle: f32) -> f32 {
-    (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
-}
 
 /// Steers `vehicle` for the checkpoints of `course` ahead, `line` meters off their middles (left
 /// positive): flat out where the way on is straight, easing off and braking into the turns - the

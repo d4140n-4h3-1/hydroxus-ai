@@ -25,6 +25,7 @@ use nalgebra::Vector3;
 
 /// How someone holds themselves, which is how easily they are seen.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Stance {
     #[default]
     Standing,

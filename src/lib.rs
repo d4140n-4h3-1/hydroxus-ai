@@ -107,6 +107,12 @@ pub fn right_of(heading: f32) -> Vector3<f32> {
     Vector3::new(-heading.cos(), 0.0, heading.sin())
 }
 
+/// `angle` brought round into -π..π.
+pub fn wrap(angle: f32) -> f32 {
+    let tau = std::f32::consts::TAU;
+    (angle + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI
+}
+
 /// The heading of `way`, along the ground; none if it goes nowhere along it.
 pub fn heading_of(way: Vector3<f32>) -> Option<f32> {
     (flat(way).norm() > 1.0e-3).then(|| way.x.atan2(way.z))

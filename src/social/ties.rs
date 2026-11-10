@@ -40,6 +40,7 @@ tuning!(
 
 /// How one takes one of its own shot down before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Grief {
     /// It goes to it, and kneels by it a while.
     Mourn,
@@ -87,6 +88,7 @@ pub enum Doing {
 
 /// One going to one of its own that went down, and kneeling by it.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Mourning {
     /// Where it lies.
     pub at: Vector3<f32>,

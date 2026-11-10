@@ -28,6 +28,7 @@ tuning!(
 
 /// An NPC's count of the bolts it has noticed from someone unseen, and its firing blind.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlindFire {
     /// How many it has noticed, and how long until they are forgotten, in seconds.
     unseen: u8,

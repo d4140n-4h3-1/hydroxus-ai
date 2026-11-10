@@ -34,6 +34,7 @@ tuning!(
 
 /// One that has seen what the player did, on its way to tell a sentry of it.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Witness {
     /// Where it was done, for the sentry to search from; and whether it knows who did it.
     pub at: Vector3<f32>,

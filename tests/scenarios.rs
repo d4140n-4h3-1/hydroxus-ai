@@ -25,6 +25,7 @@ use hydroxus_ai::{
     tactics::{
         conduct::{Conduct, Reading, Reasoners, Role},
         investigate::{Doing, Investigation},
+        look::LookAbout,
         join::{joiners, Watch},
         search::SearchMap,
     },
@@ -47,10 +48,7 @@ const SEARCH_SPEED: f32 = 2.5;
 const RUN_SPEED: f32 = 4.0;
 /// The player runs faster than a sentry, so that they can get away.
 const PLAYER_SPEED: f32 = 5.5;
-/// How long a searcher looks about where it gets to, sweeping `LOOK_SWEEP` either way, as the
-/// game's droids do.
-const LOOK_ABOUT: f32 = 3.0;
-const LOOK_SWEEP: f32 = 1.2;
+
 /// How often the searchers look over the search map, in seconds - on a clock of its own, so that
 /// it looks as often at any frame rate.
 const LOOK_EVERY: f32 = 0.5;
@@ -118,8 +116,8 @@ struct Guard {
     last_seen: V,
     /// Somewhere it was told of, to search from.
     told: Option<V>,
-    /// Searching, looking about where it got to: how long it has left, and which way it faced.
-    looking: Option<(f32, f32)>,
+    /// Searching, looking about where it got to.
+    looking: Option<LookAbout>,
     experience: Experience,
 }
 
@@ -458,12 +456,12 @@ impl World {
                     }
                 }
             }
-            Conduct::Search if guard.looking.is_some_and(|(left, _)| left > 0.0) => {
+            Conduct::Search if guard.looking.is_some_and(|look| !look.done()) => {
                 // Got where it was going: it looks about there, one way and then the other.
-                let (left, from) = guard.looking.expect("looking");
-                let left = left - dt;
-                guard.heading = from + LOOK_SWEEP * (std::f32::consts::TAU * (LOOK_ABOUT - left) / LOOK_ABOUT).sin();
-                guard.looking = Some((left, from));
+                let look = guard.looking.as_mut().expect("looking");
+                if let Some(heading) = look.step(dt) {
+                    guard.heading = heading;
+                }
             }
             Conduct::Search => {
                 guard.looking = None;
@@ -486,7 +484,7 @@ impl World {
                 let going = !guard.route.is_empty();
                 guard.walk(SEARCH_SPEED, dt);
                 if going && guard.route.is_empty() {
-                    guard.looking = Some((LOOK_ABOUT, guard.heading));
+                    guard.looking = Some(LookAbout::searching(&AI.search, guard.heading));
                 }
             }
             _ => {

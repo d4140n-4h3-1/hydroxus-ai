@@ -188,7 +188,7 @@ Two considerations make it more than a priority list. Mourning scales with the N
 | Module | What it does | Key numbers |
 | --- | --- | --- |
 | `investigate` | Stops and faces what it noticed, walks over, looks about, then goes back to what it was doing; noticing again on the way redirects it | pauses 0.8 s, looks about 4 s, ±70°, gives up after 25 s |
-| `search` | `SearchMap`: where the lost player could be, per navmesh polygon, spreading by walk distance; searchers share it and split the likeliest places | |
+| `search` | `SearchMap`: where the lost player could be, per navmesh polygon, spreading by walk distance; searchers share it and split the likeliest places; at each spot, `LookAbout::searching` sweeps the searcher's head 70° each way for 3 s (`search.look_about`, `look_sweep`) so its looks clear the map | |
 | `chase`, `pace`, `join` | Cutting the player off rather than running after them, sprinting now and then and keeping breath, and others of its kind joining a chase they see | |
 | `threat` | A weapon pointed at it (`Threat`): warning, last warning, provoked. A weapon only drawn (`Unease`): uneasy, backs off when near, settles once it's put away | aimed at within 20 m; uneasy after 0.6 s within 12 m, backs off within 4 m, settles after 3 s |
 | `fire`, `blind` | When and how widely an armed NPC shoots; firing blind back where unseen shots came from | |
@@ -272,6 +272,8 @@ Ruptura Systematis is the reference integration: `src/inhabitants.rs` holds ever
 - **The game supplies the world through closures.** `could_see` and a ray cast for line of sight; the navmesh for hearing and routes; `is_sentry(character)` for who answers an alarm or a radio call.
 - **Data drives the kinds.** Each kind of droid is a character in the game's JSON: its lines, its faction, its role, how many walk in pairs or groups, its turf, and what share wear a radio. The crate only sees numbers and enums.
 - **Events become content.** A `Change::Spotted` becomes the "spotted" bark and red eyes; a radio call that goes through calls `radio_call` on every sentry within 300 m; a `Grief::Avenge` turns a gang member hostile.
+
+**Saving.** With `serde`, an NPC's live state can be saved and loaded as well as what it learned: `Detection`, `Wariness`, `Alert`, `Investigation`, `LookAbout`, `SearchMap`, `Witness`, `Unease`, `Mourning`, `BlindFire`, `Experience`. A guard saved mid-search carries on exactly as if it never was (`tests/persistence.rs`).
 
 **Testing.** Each module is tested with plain data (`cargo test`: 159 unit tests), and `tests/scenarios.rs` runs them together: a test-only guard on a small corridor-and-room level, through the per-frame loop above, hearing, investigating, spotting, chasing, losing, searching, being told and going back to routine, at frame rates from 30 to 144 Hz, steady, uneven and hitching. It is also a worked example of wiring the modules up. Game-side behaviour is tried on small maps. In Ruptura Systematis, the Test section's Demo Town is peopled as Urbs is and loads in about a second. `MAZE_KNOCKDOWN=<seconds>` shoots the droid nearest the player to start witnesses, chases and radio calls, and `MAZE_DEBUG=1` logs what the AI did. `cargo run --release --example ai_bench` times a city's traffic, 50 drones and 2,000 flight routes: on the order of 0.05 ms, 0.003 ms and 2 ms.
 

@@ -565,11 +565,8 @@ impl Patrol {
     }
 }
 
-/// `angle` brought round into -π..π.
-pub fn wrap(angle: f32) -> f32 {
-    let tau = std::f32::consts::TAU;
-    (angle + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI
-}
+/// `angle` brought round into -π..π: [`crate::wrap`], kept here where it was first.
+pub use crate::wrap;
 
 #[cfg(test)]
 mod tests {

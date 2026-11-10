@@ -8,6 +8,7 @@
 //! - [`chase`]: cutting someone off rather than running after them, and running from a pursuer.
 //! - [`threat`]: a weapon pointed at an NPC: its warnings, then its doing something about it.
 //! - [`investigate`]: going to look where something was noticed, and looking about there.
+//! - [`look`]: looking about where it is, one way and then the other - searching or investigating.
 //! - [`fire`]: when and how wide an armed NPC shoots: from how far, how often, facing how nearly.
 //! - [`blind`]: shot at by someone it cannot see, firing blind back where the shots came from.
 //! - [`cover`]: a bystander running from a shooting, to somewhere it cannot be seen from.
@@ -24,6 +25,7 @@ pub mod cover;
 pub mod fire;
 pub mod investigate;
 pub mod join;
+pub mod look;
 pub mod pace;
 pub mod patrol;
 pub mod search;

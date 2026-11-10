@@ -107,6 +107,7 @@ impl Incident {
 
 /// How wary an NPC is from what it has been through, from 0 to 1.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Wariness {
     pub level: f32,
 }
@@ -139,6 +140,7 @@ impl Wariness {
 
 /// How a hostile NPC is going about the player, least urgent first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Alert {
     /// It has given up searching for them, and goes about, watching for them.
     Caution,

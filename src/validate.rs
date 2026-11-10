@@ -360,6 +360,7 @@ impl Tuning {
         c.fraction("search.ahead", search.ahead);
         c.positive("search.halved_after", search.halved_after);
         c.positive("search.followed", search.followed);
+        c.angle("search.look_sweep", search.look_sweep);
 
         let pace = &self.pace;
         c.fraction("pace.sprint_reserve", pace.sprint_reserve);
