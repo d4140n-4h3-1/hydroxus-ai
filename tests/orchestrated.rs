@@ -855,3 +855,119 @@ fn over_repeated_searches_a_sentry_that_remembers_finds_them_sooner_and_one_that
     assert!(matches!(judge(&control, &after, 1.96, 5), Judgement::Better { by } if by > 2.0), "{:?} against {:?}", after.mean(), control.mean());
     assert!(unlearned[1..].iter().all(|&t| t > learned[0] - 3.0));
 }
+
+// Information exchange (ROADMAP 5.2).
+
+#[test]
+fn word_of_a_sighting_goes_by_radio_far_and_by_voice_near_and_not_at_all_without_either() {
+    use hydroxus_ai::social::word::Word;
+    // Sentry 0 in the corridor spots the player; sentry 1 is off in the room, out of sight of both
+    // and too far to be shouted to.
+    let run = |radios: bool| {
+        let (mut a, mut b) = (Sentry::new(Role::Sentry), Sentry::new(Role::Sentry));
+        if radios {
+            a = a.with_radio();
+            b = b.with_radio();
+        }
+        let mut world = World::with(vec![(a, at(8.0, 2.0), EAST), (b, at(31.0, 15.0), 0.0)], at(20.0, 2.0));
+        world.run(25.0, 1.0 / 60.0);
+        world
+    };
+    let world = run(true);
+    let spotted = world.first(0, Happened::Spotted).expect("sentry 0 spotted them");
+    let told = world.first(1, Happened::Told).expect("by radio, sentry 1 was told");
+    assert!(told >= spotted && told - spotted < 0.1, "at once: {spotted} {told}");
+    assert!(world.first(1, Happened::FoundAgain).or(world.first(1, Happened::Joined)).is_some(), "it came, and found them where it was told: {:?}", world.log);
+    let event = world.sentries[1].memory.recall(Kind::Event);
+    assert!(event.len() == 1 && !event[0].firsthand, "told: secondhand");
+    assert!(world.sentries[1].trust.of(&AI.word, 0) > AI.word.trust, "sentry 0's word proved good");
+    let world = run(false);
+    assert!(world.first(1, Happened::Told).is_none() && world.sentries[1].alert().is_none(), "without radios, nothing: {:?}", world.log);
+
+    // Near enough to be shouted to, its back to both sentry 0 and the player, so that it sees
+    // neither: by voice, no radio needed.
+    let mut world = World::new(&[(at(8.0, 2.0), EAST), (at(2.0, 2.0), WEST)], at(20.0, 2.0));
+    world.run(3.0, 1.0 / 60.0);
+    let spotted = world.first(0, Happened::Spotted).expect("sentry 0 spotted them");
+    let told = world.first(1, Happened::Told).expect("told by voice");
+    assert!(told - spotted < 0.1, "{:?}", world.log);
+    // Told first; whatever it saw for itself, it saw after, having turned to go.
+    assert!(world.first(1, Happened::Joined).or(world.first(1, Happened::Spotted)).is_none_or(|t| t > told), "{:?}", world.log);
+    let _ = Word::seen((), at(0.0, 0.0), 0.0, 0);
+}
+
+#[test]
+fn stale_word_is_doubted_and_fresh_word_acted_on() {
+    use hydroxus_ai::social::word::Word;
+    let mut world = World::new(&[(at(4.0, 2.0), EAST)], GONE);
+    world.run(130.0, 0.25);
+    let now = world.squad.now();
+    // Seen two minutes ago, passed on once: not worth going after.
+    let stale = Word::seen((), at(30.0, 12.0), now - 120.0, 50).passed_on(&AI.word, 50);
+    assert!(!world.sentries[0].hear_word(&AI, stale, now));
+    world.run(0.5, 1.0 / 60.0);
+    assert!(world.first(0, Happened::Doubted).is_some() && world.sentries[0].alert().is_none());
+    // Seen a moment ago: it goes.
+    let fresh = Word::seen((), at(30.0, 12.0), world.squad.now() - 1.0, 50).passed_on(&AI.word, 50);
+    assert!(world.sentries[0].hear_word(&AI, fresh, world.squad.now()));
+    world.run(0.5, 1.0 / 60.0);
+    assert!(world.first(0, Happened::Told).is_some() && world.sentries[0].alert() == Some(Alert::Evasion));
+}
+
+#[test]
+fn word_from_one_whose_word_keeps_proving_wrong_comes_to_be_doubted_and_a_trusted_one_still_believed() {
+    use hydroxus_ai::social::word::Word;
+    // A citizen (77) keeps telling the sentry the player is in the room. They never are.
+    let mut world = World::new(&[(at(4.0, 2.0), EAST)], GONE);
+    let mut went = 0;
+    for _ in 0..6 {
+        let now = world.squad.now();
+        let word = Word::seen((), at(30.0, 12.0), now, 77).passed_on(&AI.word, 77);
+        if !world.sentries[0].hear_word(&AI, word, now) {
+            break;
+        }
+        went += 1;
+        // It searches, finds nothing, gives up, and calms down.
+        world.run(300.0, 0.25);
+        assert!(world.sentries[0].alert().is_none() || world.sentries[0].alert() == Some(Alert::Caution));
+    }
+    world.run(0.1, 1.0 / 60.0);
+    let doubted = world.log.iter().filter(|&&(_, _, h)| h == Happened::Doubted).count();
+    println!("went on 77's word {went} times before doubting it; trust {:.2}", world.sentries[0].trust.of(&AI.word, 77));
+    assert!(doubted == 1 && (1..=3).contains(&went), "went {went} times");
+    assert!(world.sentries[0].trust.of(&AI.word, 77) < AI.word.trust);
+    // The same word, from someone else it has no reason to doubt: it goes.
+    let now = world.squad.now();
+    assert!(world.sentries[0].hear_word(&AI, Word::seen((), at(30.0, 12.0), now, 78).passed_on(&AI.word, 78), now));
+}
+
+#[test]
+fn what_it_sees_for_itself_comes_before_what_it_is_told() {
+    use hydroxus_ai::social::word::Word;
+    let mut world = World::new(&[(at(8.0, 2.0), EAST)], at(20.0, 2.0));
+    world.run(3.0, 1.0 / 60.0);
+    assert_eq!(world.sentries[0].alert(), Some(Alert::Alert));
+    let now = world.squad.now();
+    // Told they are somewhere else entirely, while it can see them: it takes no notice.
+    assert!(!world.sentries[0].hear_word(&AI, Word::seen((), at(30.0, 15.0), now, 9).passed_on(&AI.word, 9), now));
+    world.run(0.5, 1.0 / 60.0);
+    assert_eq!(world.sentries[0].alert(), Some(Alert::Alert));
+    assert!(matches!(world.intents[0], Intent::GoTo { at, pace: Pace::Run } if flat(at - world.player).norm() < 1.0));
+}
+
+
+#[test]
+fn a_search_that_comes_to_nothing_widens_rather_than_stands_about() {
+    // Told the player is right where it stands, in the open corridor: one look, and there is
+    // nowhere left they could be - so near. In time, though, they could be further.
+    let mut world = World::new(&[(at(20.0, 2.0), EAST)], GONE);
+    world.sentries[0].tell(at(20.0, 2.0));
+    let mut furthest = 0.0f32;
+    for _ in 0..(20 * 60) {
+        world.run(1.0 / 60.0, 1.0 / 60.0);
+        furthest = furthest.max(flat(world.bodies[0].feet - at(20.0, 2.0)).norm());
+    }
+    assert!(furthest > 6.0, "it went searching further afield: {furthest:.1} m at most");
+    assert_eq!(world.sentries[0].alert(), Some(Alert::Evasion));
+}
+

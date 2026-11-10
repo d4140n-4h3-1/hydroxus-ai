@@ -216,6 +216,8 @@ pub struct Tuning {
     pub ties: crate::social::ties::Tuning,
     /// The player passing by.
     pub passing: crate::social::passing::Tuning,
+    /// Passing word on, and taking it.
+    pub word: crate::social::word::Tuning,
     /// Learning what works.
     pub lesson: crate::think::lesson::Tuning,
     /// Learning the player's habits.
@@ -269,6 +271,7 @@ impl Tuning {
         trouble: crate::social::trouble::Tuning::DEFAULT,
         ties: crate::social::ties::Tuning::DEFAULT,
         passing: crate::social::passing::Tuning::DEFAULT,
+        word: crate::social::word::Tuning::DEFAULT,
         lesson: crate::think::lesson::Tuning::DEFAULT,
         habit: crate::think::habit::Tuning::DEFAULT,
         haunt: crate::think::haunt::Tuning::DEFAULT,

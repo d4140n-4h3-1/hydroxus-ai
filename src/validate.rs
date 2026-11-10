@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 41] = [
+        let modules: [(&str, Vec<(String, f64)>); 42] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -267,6 +267,7 @@ impl Tuning {
             ("trouble", self.trouble.numbers()),
             ("ties", self.ties.numbers()),
             ("passing", self.passing.numbers()),
+            ("word", self.word.numbers()),
             ("lesson", self.lesson.numbers()),
             ("habit", self.habit.numbers()),
             ("haunt", self.haunt.numbers()),
@@ -285,7 +286,7 @@ impl Tuning {
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
                     "cover", "team", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
-                    "passing", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
+                    "passing", "word", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
                 ]
                 .map(String::from),
             )
@@ -456,6 +457,12 @@ impl Tuning {
 
         c.fraction("passing.nod", self.passing.nod);
 
+        let w = &self.word;
+        c.fraction("word.retold", w.retold);
+        c.positive("word.stale_half_life", w.stale_half_life);
+        c.fraction("word.trust", w.trust);
+        c.fraction("word.trust_rate", w.trust_rate);
+
         let l = &self.lesson;
         c.fraction("lesson.rate", l.rate);
         // At 1, what never works would weigh nothing: barred, where it should only be less likely.
@@ -503,6 +510,7 @@ impl Tuning {
         c.fraction("orchestrate.remembered_danger", o.remembered_danger);
         c.fraction("orchestrate.danger_noted", o.danger_noted);
         c.some("orchestrate.recall_most", o.recall_most as f64);
+        c.fraction("orchestrate.believe", o.believe);
 
         let p = &self.priority;
         c.positive("priority.committed_after", p.committed_after);

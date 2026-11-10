@@ -18,6 +18,8 @@
 //! - [`ties`]: one of a pair or group shot down before the rest - mourning it, running, or going
 //!   after whoever did it.
 //! - [`trouble`]: one of them found lying, an alarm, gunfire - told on, and kept away from.
+//! - [`word`]: news to act on, passed on by voice, radio or alarm: who saw what, where, when,
+//!   firsthand or told, how sure, and how far the source is trusted.
 //! - [`passing`]: greeting the player, tipping them off, nodding, keeping away, or glaring, as
 //!   they go by.
 
@@ -32,3 +34,4 @@ pub mod rumour;
 pub mod talk;
 pub mod ties;
 pub mod trouble;
+pub mod word;

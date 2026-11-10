@@ -39,6 +39,7 @@ use crate::{
         hearing::Heard,
         sight::{Seeing, Stance},
     },
+    social::word::{self, Channel, Trust, Word},
     tactics::{
         conduct::{Conduct, Reading, Reasoners, Role},
         investigate::{Doing, Investigation},
@@ -108,6 +109,9 @@ pub const RECALL_WITHIN: f32 = 30.0;
 pub const RECALL_MOST: usize = 8;
 pub const MEMORY_LEAN: f32 = 1.0;
 pub const LEAN_NEAR: f32 = 4.0;
+/// How much a sentry has to believe word of where the player is (see [`word::Word::belief`]) to
+/// go and search there.
+pub const BELIEVE: f32 = 0.3;
 
 tuning!(
     /// How the orchestration layer runs the modules together (see the module's constants).
@@ -155,6 +159,8 @@ tuning!(
         recall_most: usize = RECALL_MOST,
         memory_lean: f32 = MEMORY_LEAN,
         lean_near: f32 = LEAN_NEAR,
+        /// How much a sentry has to believe word of where the player is to search there.
+        believe: f32 = BELIEVE,
     }
 );
 
@@ -203,6 +209,9 @@ pub enum Happened {
     Told,
     /// It saw another sentry after the player, and joined in.
     Joined,
+    /// It was told where the player was, and did not believe it enough to go: too old, passed on
+    /// too often, or from one whose word has proved wrong.
+    Doubted,
 }
 
 /// What a sentry takes in this frame: the game's part.
@@ -253,6 +262,13 @@ pub struct Sentry {
     /// What it remembers having happened (see [`crate::think::memory`]): where it saw and lost
     /// the player, where it looked and what it found, what it was told, where it came to harm.
     pub memory: Memory,
+    /// Whether it has a radio, to pass word on and be told it from afar (see [`word`]).
+    pub radio: bool,
+    /// How far it trusts the word of each it has been told by.
+    pub trust: Trust,
+    /// Whose word it is searching on, if anyone's: to trust the more if it finds them, the less
+    /// if it does not.
+    acting_on: Option<u32>,
     alert: Option<Alert>,
     /// Seconds left of its phase, Evasion or Caution.
     left: f32,
@@ -284,8 +300,8 @@ pub struct Sentry {
     /// Where it last saw the player, and which way they were going.
     last_seen: Option<Vector3<f32>>,
     going: Vector3<f32>,
-    /// Where it was told the player was, and how many seconds ago they were there.
-    told: Option<(Vector3<f32>, f32)>,
+    /// Where it was told the player was, how many seconds ago they were there, and how sure of it.
+    told: Option<(Vector3<f32>, f32, f32)>,
     feet: Vector3<f32>,
     heading: f32,
     happened: Vec<Happened>,
@@ -302,6 +318,9 @@ impl Sentry {
             experience: Experience::new(),
             traits: Traits::NEUTRAL,
             memory: Memory::new(),
+            radio: false,
+            trust: Trust::new(),
+            acting_on: None,
             alert: None,
             left: 0.0,
             investigation: None,
@@ -359,6 +378,12 @@ impl Sentry {
         self.goal
     }
 
+    /// With a radio.
+    pub fn with_radio(mut self) -> Self {
+        self.radio = true;
+        self
+    }
+
     /// Its traits instead: what kind of NPC it is.
     pub fn with_traits(mut self, traits: Traits) -> Self {
         self.traits = traits;
@@ -398,8 +423,29 @@ impl Sentry {
     pub fn tell_from(&mut self, at: Vector3<f32>, ago: f32) {
         if at.iter().all(|v| v.is_finite()) {
             let ago = if ago.is_finite() { ago.max(0.0) } else { 0.0 };
-            self.told = Some((at, ago));
+            self.told = Some((at, ago, f32::NAN));
+            self.acting_on = None;
         }
+    }
+
+    /// It is told `word` of where the player was, at `now` on the game's clock (see
+    /// [`word::Word`]): believed enough - fresh, firsthand or from a source it trusts, passed on
+    /// few times - it searches there, as sure as it believes it, and will trust the source the
+    /// more if it finds them and the less if not; otherwise it takes note, and stays as it was.
+    /// After the player already, it takes no notice. Whether it acted on it.
+    pub fn hear_word(&mut self, tuning: &crate::Tuning, word: Word<()>, now: f32) -> bool {
+        if self.alert == Some(Alert::Alert) || !word.at.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let belief = word.belief(&tuning.word, &self.trust, now);
+        if belief < tuning.orchestrate.believe {
+            self.memory.note(&tuning.memory, Record::new(Kind::Event).at(word.at).secondhand().strength(belief.max(tuning.memory.forgotten)).importance(0.1));
+            self.happened.push(Happened::Doubted);
+            return false;
+        }
+        self.told = Some((word.at, word.age(now), belief));
+        self.acting_on = (!word.firsthand()).then_some(word.from);
+        true
     }
 
     /// A noise `nearness` near (see [`Heard::nearness`]): the more aware for it, and if it notices
@@ -618,6 +664,7 @@ impl Sentry {
                 self.investigation = None;
                 self.pending = None;
                 self.attentive = None;
+                self.acting_on = None;
                 self.alert = Some(Alert::Alert);
                 self.goal = None;
                 self.look = None;
@@ -639,11 +686,12 @@ impl Sentry {
             self.sighting = (if visible > 0.0 { 1.0 } else { 0.8 }, 0.0);
         }
         // Told where to look: it searches there.
-        if let Some((there, ago)) = self.told.take().filter(|_| self.alert != Some(Alert::Alert)) {
+        if let Some((there, ago, sure)) = self.told.take().filter(|_| self.alert != Some(Alert::Alert)) {
             self.wariness.note(&tuning.alert, Incident::Alarm);
             self.alert = Some(Alert::Evasion);
             self.last_seen = Some(there);
-            self.sighting = (unit(tuning.orchestrate.told), ago);
+            let sure = if sure.is_finite() { sure } else { tuning.orchestrate.told };
+            self.sighting = (unit(sure), ago);
             self.going = Vector3::zeros();
             self.investigation = None;
             self.lost_at(tuning, search, mesh, there, None);
@@ -677,6 +725,10 @@ impl Sentry {
                     self.look = None;
                     if phase == Alert::Evasion {
                         self.experience.report(tuning, Some(mesh), Outcome::succeeded(Venture::Search).at(senses.player));
+                        // Searching on someone's word, and there they were: their word was good.
+                        if let Some(source) = self.acting_on.take() {
+                            self.trust.confirmed(&tuning.word, source);
+                        }
                     }
                 }
                 (Alert::Evasion, Some(Alert::Caution)) => {
@@ -685,6 +737,10 @@ impl Sentry {
                     self.goal = None;
                     self.look = None;
                     self.experience.report(tuning, None, Outcome::came_to_nothing(Venture::Search));
+                    // Searching on someone's word, and nothing: their word was no good.
+                    if let Some(source) = self.acting_on.take() {
+                        self.trust.refuted(&tuning.word, source);
+                    }
                 }
                 (Alert::Caution, None) => {
                     self.happened.push(Happened::Calm);
@@ -700,8 +756,12 @@ impl Sentry {
         self.experience.step(tuning, dt);
     }
 
-    /// It saw another sentry after the player, at `player`, and joins in.
-    fn join(&mut self, player: Vector3<f32>) {
+    /// It saw another sentry after the player, at `player`, and joins in - and if it came on
+    /// someone's word, the word was good.
+    fn join(&mut self, tuning: &crate::Tuning, player: Vector3<f32>) {
+        if let Some(source) = self.acting_on.take() {
+            self.trust.confirmed(&tuning.word, source);
+        }
         self.alert = Some(Alert::Alert);
         self.detection.alert();
         self.investigation = None;
@@ -776,8 +836,14 @@ impl Sentry {
                         Intent::Face { heading: self.heading }
                     } else {
                         if self.goal.is_none() {
+                            // Not where it stands: it has just looked about there. (A polygon's
+                            // worth counts the chance next to it too, so the one it stands in,
+                            // between places it cannot see into from there, would otherwise be
+                            // chosen again and again, and it would never go into them.)
                             let weigh = |n| self.weigh_by_memory(tuning, mesh, n);
-                            self.goal = (!search.is_empty()).then(|| search.best_by(mesh, self.feet, taken, t.apart, t.within, weigh)).flatten();
+                            let mut taken = taken.to_vec();
+                            taken.push(self.feet);
+                            self.goal = (!search.is_empty()).then(|| search.best_by(mesh, self.feet, &taken, t.apart, t.within, weigh)).flatten();
                         }
                         match self.goal {
                             Some(at) => Intent::GoTo { at, pace: Pace::Search },
@@ -813,19 +879,33 @@ impl Sentry {
 }
 
 /// What a squad of sentries shares: the search map they search by - one hunt at a time, the last
-/// sentry to lose the player or be told where they are setting it afresh - and the clock it is
-/// looked over by.
+/// sentry to lose the player or be told where they are setting it afresh - the clock it is looked
+/// over by, and the clock word is timed by. A sentry's place in the squad's list is its id in the
+/// word it passes on: give word from others than the squad ids of their own beyond it.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Squad {
     pub search: SearchMap,
     look_in: f32,
+    /// The squad's clock, in seconds since it was made: when word of a sighting was seen.
+    #[cfg_attr(feature = "serde", serde(default))]
+    now: f32,
+    /// Where and when the player was last lost, or last told of: to search from afresh if the
+    /// search map comes to nothing.
+    #[cfg_attr(feature = "serde", serde(default))]
+    hunt: Option<(Vector3<f32>, f32)>,
 }
 
 impl Squad {
     /// No one lost yet.
     pub fn new(tuning: &crate::Tuning) -> Self {
-        Self { search: SearchMap::with(tuning.search), look_in: 0.0 }
+        Self { search: SearchMap::with(tuning.search), look_in: 0.0, now: 0.0, hunt: None }
+    }
+
+    /// The squad's clock, in seconds since it was made: the time to give word seen now (see
+    /// [`Sentry::hear_word`]).
+    pub fn now(&self) -> f32 {
+        self.now
     }
 
     /// A noise at `at`, carrying `loudness` meters along the floor of `mesh`: each of `sentries`
@@ -884,16 +964,58 @@ impl Squad {
         for joiner in joiners(&watches, seeing, &clear) {
             relayed[joiner] = true;
             if sentries[joiner].alert != Some(Alert::Alert) && senses[joiner].player.iter().all(|v| v.is_finite()) {
-                sentries[joiner].join(senses[joiner].player);
+                sentries[joiner].join(tuning, senses[joiner].player);
             }
         }
         for ((sentry, sense), &relayed) in sentries.iter_mut().zip(senses).zip(&relayed) {
             sentry.perceive(tuning, sense, relayed, &mut self.search, mesh, dt);
         }
+        self.now += dt;
+        // Where the hunt starts from now: wherever one lost them, or was told of them, this frame.
+        for sentry in sentries.iter() {
+            let set_off = sentry.happened.iter().any(|h| matches!(h, Happened::LostContact | Happened::Told));
+            if let Some(at) = sentry.last_seen.filter(|_| set_off) {
+                let told_ago = if sentry.happened.contains(&Happened::Told) { sentry.sighting.1 } else { 0.0 };
+                self.hunt = Some((at, self.now - told_ago));
+            }
+        }
+        // Word of a sighting: each that saw the player for itself this frame - spotting them, or
+        // finding them again - passes it on to each it reaches: by radio, both having one, or
+        // by voice, near enough and nothing in the way (`clear`). Each takes it as its own
+        // trust of the one telling, and how fresh and sure it is, has it.
+        for i in 0..n {
+            let saw = sentries[i].happened.iter().any(|h| matches!(h, Happened::Spotted | Happened::FoundAgain));
+            if !saw || !senses[i].player.iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            let word = Word::seen((), senses[i].player, self.now, i as u32).passed_on(&tuning.word, i as u32);
+            let (from, radio) = (sentries[i].feet, sentries[i].radio);
+            for j in (0..n).filter(|&j| j != i) {
+                let (to, theirs) = (sentries[j].feet, sentries[j].radio);
+                let reached = word::reaches(&tuning.word, Channel::Radio, from, to, (radio, theirs), || false)
+                    || word::reaches(&tuning.word, Channel::Voice, from, to, (radio, theirs), || clear(i, j));
+                if reached {
+                    sentries[j].hear_word(tuning, word, self.now);
+                }
+            }
+        }
         // The search: where the player could be spreading as fast as they could go, cleared where
         // the searchers look and do not see them - on a clock of its own, as often at any frame rate.
         let o = &tuning.orchestrate;
-        if sentries.iter().any(|s| s.alert == Some(Alert::Evasion)) && !self.search.is_empty() {
+        let hunting = sentries.iter().any(|s| s.alert == Some(Alert::Evasion));
+        // Searched everywhere they could have been, and not found: they have had time to get
+        // further. Search afresh from where they were lost, as far as they could have gone since -
+        // rather than stand about looking at nothing.
+        if hunting && self.search.is_empty() {
+            if let Some((at, when)) = self.hunt {
+                self.search.lose(mesh, at, None);
+                self.search.spread(mesh, o.getaway.max(0.0) * (self.now - when).max(0.0));
+            }
+        }
+        if !hunting {
+            self.hunt = None;
+        }
+        if hunting && !self.search.is_empty() {
             self.search.spread(mesh, o.getaway * dt);
             self.look_in -= dt;
             let reach = tuning.sight.reach(Some(Alert::Evasion), Stance::Standing, seeing.dark).min(o.search_sight);
