@@ -144,8 +144,8 @@ impl Suspicions {
     /// `weight` from 0 to 1 for how much it matters (see [`crate::social::trouble::Kind::strength`]).
     /// If it saw the player near there about then, it suspects them, as strongly as the closest
     /// sighting says: full within no time and no distance, nothing at the tuning's `near` or
-    /// `within`. What it saw of them far off about then clears them as an alibi would. Its
-    /// suspicion of `id` at `now`, after.
+    /// `within`. Under the tuning's `forgotten`, it is not kept. What it saw of them far off about
+    /// then clears them as an alibi would. Its suspicion of `id` at `now`, after.
     pub fn trouble(&mut self, tuning: &Tuning, id: u32, at: Vector3<f32>, when: f32, weight: f32, now: f32) -> f32 {
         if !sane(at, when) || !now.is_finite() || !weight.is_finite() {
             return self.of(tuning, id, now);
@@ -160,7 +160,8 @@ impl Suspicions {
             })
             .fold(0.0f32, f32::max);
         let strength = tuning.most.clamp(0.0, 1.0) * weight.clamp(0.0, 1.0) * closeness;
-        if strength > 0.0 {
+        // Too faint to keep, it is not kept: else it would be forgotten and found afresh in turn.
+        if strength >= tuning.forgotten {
             self.keep(tuning, Suspect { id, at, when, strength, noted: now, hops: 0 }, now);
             let own: Vec<Sighting> = self.sightings.clone();
             for s in own {
@@ -314,6 +315,11 @@ mod tests {
         assert_eq!(nowhere.trouble(&T, 1, at(0.0), 100.0, 1.0, 110.0), 0.0);
         assert_eq!(long_before.trouble(&T, 1, at(0.0), 100.0, 1.0, 110.0), 0.0);
         assert!(nowhere.suspects().is_empty());
+        // Barely near enough: too faint to keep, so not kept - nor forgotten and found again.
+        let mut barely = Suspicions::new();
+        barely.saw_player(&T, at(24.0), 100.0);
+        assert_eq!(barely.trouble(&T, 1, at(0.0), 100.0, 1.0, 110.0), 0.0);
+        assert!(barely.suspects().is_empty());
         // A lesser kind of trouble, less.
         let mut minor = Suspicions::new();
         minor.saw_player(&T, at(2.0), 100.0);
