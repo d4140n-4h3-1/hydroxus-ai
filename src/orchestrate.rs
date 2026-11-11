@@ -46,6 +46,7 @@ use crate::{
         join::{joiners, Watch},
         look::LookAbout,
         priority::{self, Context, Traits},
+        roles::{self, Chaser, Part},
         search::SearchMap,
     },
     think::{
@@ -112,6 +113,12 @@ pub const LEAN_NEAR: f32 = 4.0;
 /// How much a sentry has to believe word of where the player is (see [`word::Word::belief`]) to
 /// go and search there.
 pub const BELIEVE: f32 = 0.3;
+/// A searcher going somewhere another searcher is within this many meters of, nearer it than
+/// itself, gives it up for somewhere else: it is covered.
+pub const COVERED_WITHIN: f32 = 4.0;
+/// How fast, in meters a second, the player has to be going for a sentry to cut them off rather
+/// than run after them.
+pub const GOING_LEAST: f32 = 1.0;
 
 tuning!(
     /// How the orchestration layer runs the modules together (see the module's constants).
@@ -161,6 +168,11 @@ tuning!(
         lean_near: f32 = LEAN_NEAR,
         /// How much a sentry has to believe word of where the player is to search there.
         believe: f32 = BELIEVE,
+        /// How near another searcher, nearer than itself, has to be to where a searcher is going
+        /// for it to give that up, in meters; 0, never.
+        covered_within: f32 = COVERED_WITHIN,
+        /// How fast the player has to be going to be cut off, in meters a second.
+        going_least: f32 = GOING_LEAST,
     }
 );
 
@@ -210,8 +222,14 @@ pub enum Happened {
     /// It saw another sentry after the player, and joined in.
     Joined,
     /// It was told where the player was, and did not believe it enough to go: too old, passed on
-    /// too often, or from one whose word has proved wrong.
+    /// too often, or from one whose word has proved wrong - or than what it has already.
     Doubted,
+    /// In a chase, it goes to cut the player off rather than running after them (see
+    /// [`roles`]).
+    CuttingOff,
+    /// Going to search somewhere, it found another searcher had got there, and chose somewhere
+    /// else.
+    Reassessed,
 }
 
 /// What a sentry takes in this frame: the game's part.
@@ -303,6 +321,9 @@ pub struct Sentry {
     going: Vector3<f32>,
     /// Where it was told the player was, how many seconds ago they were there, and how sure of it.
     told: Option<(Vector3<f32>, f32, f32)>,
+    /// Its part in a chase, after the player with others (see [`roles`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    part: Option<Part>,
     feet: Vector3<f32>,
     heading: f32,
     happened: Vec<Happened>,
@@ -341,10 +362,25 @@ impl Sentry {
             last_seen: None,
             going: Vector3::zeros(),
             told: None,
+            part: None,
             feet: Vector3::zeros(),
             heading: 0.0,
             happened: Vec::new(),
         }
+    }
+
+    /// Its part in a chase: none, not after the player.
+    pub fn part(&self) -> Option<Part> {
+        self.part
+    }
+
+    /// It, as one of those after the player knows itself (see [`roles::Chaser`]): where it has
+    /// them, and which way going if they are going fast enough to cut off.
+    fn chaser(&self, tuning: &crate::Tuning, sees: bool) -> Chaser {
+        // `going` sums how they moved each frame, fading by e^-4 a second: about a quarter of
+        // their speed, in meters a second, at any frame rate.
+        let going = (self.going.norm() * 4.0 >= tuning.orchestrate.going_least).then_some(self.going);
+        Chaser { feet: self.feet, them: self.last_seen.unwrap_or(self.feet), going, sees, aggression: self.traits.aggression, was: self.part }
     }
 
     /// Its routine, walking from one of `posts` to the next and round again, rather than the
@@ -439,7 +475,14 @@ impl Sentry {
             return false;
         }
         let belief = word.belief(&tuning.word, &self.trust, now);
-        if belief < tuning.orchestrate.believe {
+        // Searching already on what it believes clearly more - its own sighting, or better word -
+        // it keeps to that: two accounts of where they are, and it goes by the surer.
+        let o = &tuning.orchestrate;
+        let holding = match self.alert {
+            Some(Alert::Evasion) => self.sighting.0 * 0.5f32.powf(self.sighting.1 / o.sighting_half_life.max(1.0e-3)),
+            _ => 0.0,
+        };
+        if belief < o.believe || holding >= belief + o.switch_lead_by {
             self.memory.note(&tuning.memory, Record::new(Kind::Event).at(word.at).secondhand().strength(belief.max(tuning.memory.forgotten)).importance(0.1));
             self.happened.push(Happened::Doubted);
             return false;
@@ -776,7 +819,18 @@ impl Sentry {
     }
 
     /// Chooses what to do, and what that means it does this frame.
-    fn decide(&mut self, tuning: &crate::Tuning, reasoners: &mut Reasoners, search: &SearchMap, mesh: &NavMesh, taken: &[Vector3<f32>], dt: f32) -> (Intent, Conduct) {
+    /// `taken`: where other searchers are going; `others`: where other searchers are.
+    #[allow(clippy::too_many_arguments)]
+    fn decide(
+        &mut self,
+        tuning: &crate::Tuning,
+        reasoners: &mut Reasoners,
+        search: &SearchMap,
+        mesh: &NavMesh,
+        taken: &[Vector3<f32>],
+        others: &[Vector3<f32>],
+        dt: f32,
+    ) -> (Intent, Conduct) {
         let t = &tuning.orchestrate;
         let reading = Reading {
             hunting: self.alert == Some(Alert::Alert),
@@ -809,7 +863,11 @@ impl Sentry {
         self.conduct = Some(conduct);
         let there = |goal: Vector3<f32>, feet: Vector3<f32>| flat(goal - feet).norm() <= t.arrived;
         let intent = match conduct {
-            Conduct::Chase => Intent::GoTo { at: self.last_seen.unwrap_or(self.feet), pace: Pace::Run },
+            Conduct::Chase => {
+                let chaser = self.chaser(tuning, false);
+                let cut = self.part.and_then(|part| roles::cut_spot(&tuning.roles, &tuning.chase, &chaser, part, |p| mesh.poly_at(p).is_some()));
+                Intent::GoTo { at: cut.unwrap_or(chaser.them), pace: Pace::Run }
+            }
             Conduct::Investigate => match self.investigation.take() {
                 Some(mut look) => match look.step(&tuning.investigate, self.feet, self.heading, dt) {
                     Doing::Face { heading } | Doing::LookAround { heading } => {
@@ -839,6 +897,21 @@ impl Sentry {
                         self.at_spot = true;
                         Intent::Face { heading: self.heading }
                     } else {
+                        // Another searcher is at where it is going, or nearly, and nearer it than
+                        // itself: it is looking there for it. Somewhere else, then - not there.
+                        let mut covered = None;
+                        if let Some(goal) = self.goal {
+                            let mine = flat(goal - self.feet).norm();
+                            let nearer = |o: &Vector3<f32>| {
+                                let theirs = flat(o - goal).norm();
+                                theirs < t.covered_within && theirs < mine
+                            };
+                            if others.iter().any(nearer) {
+                                covered = Some(goal);
+                                self.goal = None;
+                                self.happened.push(Happened::Reassessed);
+                            }
+                        }
                         if self.goal.is_none() {
                             // Not where it stands: it has just looked about there. (A polygon's
                             // worth counts the chance next to it too, so the one it stands in,
@@ -847,6 +920,7 @@ impl Sentry {
                             let weigh = |n| self.weigh_by_memory(tuning, mesh, n);
                             let mut taken = taken.to_vec();
                             taken.push(self.feet);
+                            taken.extend(covered);
                             self.goal = (!search.is_empty()).then(|| search.best_by(mesh, self.feet, &taken, t.apart, t.within, weigh)).flatten();
                         }
                         match self.goal {
@@ -965,6 +1039,19 @@ impl Squad {
             })
             .collect();
         let mut relayed = vec![false; n];
+        // After the player already, with a radio: as long as another after them with one, in
+        // reach, sees them, it knows where they are - and stays on the chase out of sight of
+        // them, to cut them off, say. Without one, it has only its own eyes and the chase it sees.
+        for i in 0..n {
+            if sentries[i].alert != Some(Alert::Alert) || !sentries[i].radio {
+                continue;
+            }
+            relayed[i] = (0..n).any(|j| {
+                j != i
+                    && watches[j].sees_player
+                    && word::reaches(&tuning.word, Channel::Radio, watches[j].feet, watches[i].feet, (sentries[j].radio, true), || false)
+            });
+        }
         for joiner in joiners(&watches, seeing, &clear) {
             relayed[joiner] = true;
             if sentries[joiner].alert != Some(Alert::Alert) && senses[joiner].player.iter().all(|v| v.is_finite()) {
@@ -973,6 +1060,17 @@ impl Squad {
         }
         for ((sentry, sense), &relayed) in sentries.iter_mut().zip(senses).zip(&relayed) {
             sentry.perceive(tuning, sense, relayed, &mut self.search, mesh, dt);
+        }
+        // Parts in the chase, among those after the player, each by what it knows of them.
+        let chasing: Vec<usize> = (0..n).filter(|&i| sentries[i].alert == Some(Alert::Alert)).collect();
+        let chasers: Vec<Chaser> = chasing.iter().map(|&i| sentries[i].chaser(tuning, watches[i].sees_player)).collect();
+        let parts = roles::parts(&tuning.roles, &chasers);
+        for (i, sentry) in sentries.iter_mut().enumerate() {
+            let part = chasing.iter().position(|&c| c == i).map(|k| parts[k]);
+            if matches!(part, Some(Part::CutOff { .. })) && !matches!(sentry.part, Some(Part::CutOff { .. })) {
+                sentry.happened.push(Happened::CuttingOff);
+            }
+            sentry.part = part;
         }
         self.now += dt;
         // Where the hunt starts from now: wherever one lost them, or was told of them, this frame.
@@ -1035,12 +1133,18 @@ impl Squad {
         // Each chooses what to do - searchers clear of where the others are going, including where
         // those that chose before it this frame have just set off for.
         let mut goals: Vec<Option<Vector3<f32>>> = sentries.iter().map(|s| s.goal.filter(|_| s.alert == Some(Alert::Evasion))).collect();
-        let mut taken = Vec::new();
+        let searchers: Vec<Option<Vector3<f32>>> = sentries.iter().map(|s| (s.alert == Some(Alert::Evasion)).then_some(s.feet)).collect();
+        let (mut taken, mut others) = (Vec::new(), Vec::new());
         let mut thoughts = Vec::with_capacity(n);
         for (i, sentry) in sentries.iter_mut().enumerate() {
             taken.clear();
             taken.extend(goals.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, g)| *g));
-            let (intent, conduct) = sentry.decide(tuning, reasoners, &self.search, mesh, &taken, dt);
+            others.clear();
+            // Only a searcher asks where the other searchers are.
+            if searchers[i].is_some() {
+                others.extend(searchers.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, f)| *f));
+            }
+            let (intent, conduct) = sentry.decide(tuning, reasoners, &self.search, mesh, &taken, &others, dt);
             goals[i] = sentry.goal.filter(|_| sentry.alert == Some(Alert::Evasion));
             thoughts.push(Thought { intent, conduct, happened: std::mem::take(&mut sentry.happened) });
         }

@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 44] = [
+        let modules: [(&str, Vec<(String, f64)>); 45] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -245,6 +245,7 @@ impl Tuning {
             ("blind", self.blind.numbers()),
             ("cover", self.cover.numbers()),
             ("team", self.team.numbers()),
+            ("roles", self.roles.numbers()),
             ("patrol", self.patrol.numbers()),
             ("grid", self.grid.numbers()),
             ("navmesh", self.navmesh.numbers()),
@@ -286,7 +287,7 @@ impl Tuning {
             .chain(
                 [
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
-                    "cover", "team", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
+                    "cover", "team", "roles", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
                     "passing", "word", "suspicion", "relation", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
                 ]
@@ -464,6 +465,8 @@ impl Tuning {
         c.positive("word.stale_half_life", w.stale_half_life);
         c.fraction("word.trust", w.trust);
         c.fraction("word.trust_rate", w.trust_rate);
+
+        c.some("roles.pursuers", self.roles.pursuers as f64);
 
         let s = &self.suspicion;
         c.positive("suspicion.near", s.near);

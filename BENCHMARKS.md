@@ -158,6 +158,16 @@ After milestone 3.1 (each sentry stepping its memory and checking it for danger 
 runs: 250 sentries 0.159 ms a frame (worst 4.0 ms), 100 0.032 ms, 50 0.015 ms, 10 0.0027 ms -
 unchanged.
 
+After milestones 5.3 and 5.4 (parts in a chase, radio keeping a chaser on it, searchers
+reassessing), measured side by side the same day: the previous commit 0.168–0.175 ms a frame at
+250 (worst 4.0–4.5 ms), 100 0.032 ms; with this 0.205 ms at 250 (worst 0.80–0.81 ms), 100 0.037
+ms; with parts switched off (`roles.pursuers` 1000) 0.178 ms at 250 (worst 4.3 ms). So the code
+costs nothing measurable; the extra ~0.03 ms is behaviour - the bench's sentries have no radios,
+so those cutting the player off go out of sight and drop to searching (1.5 searching on average
+against 0.4), and a searcher's cost map is the dear part. The worst frame falls because the squad
+no longer loses the player all at once. The first version was quadratic (every sentry building a
+list of all the searchers each frame: 0.206 ms with parts off); now only searchers build it.
+
 ## Memory retrieval (2026-11-10, milestone 3.3)
 
 `ai_bench`'s **memory** section: one memory full (32 records of each of 7 kinds, 224, over 200 m).
