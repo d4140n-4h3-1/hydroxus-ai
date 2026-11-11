@@ -242,6 +242,12 @@ NPCs hold opinions of the player, pass news on to each other, belong to factions
 
 **Relationships between NPCs** (`social::relation`). Affinity, from -1 to 1, of one NPC (`Who`, its number and faction) for another: from their factions - `kin` (0.4) for its own; its faction's `relation` to the other's times `outsider` (0.3) for another (so rivals at -1 are -0.3, and the rest +0.3); 0 for one of no faction - plus what has passed between them in `Relations`: `together(a, b, dt, now)` (+0.002 a second each way, at most `most_together` 0.4), `helped(of, by, now)` (+0.3), `harmed(of, by, now)` (−0.6), all easing back over `half_life` (1 h), and not necessarily the same both ways. Use it twice: `shares_with(affinity)` (at least `share_above`, −0.2) decides whether one tells another what it knows, so enemies keep news to themselves; and `relation::trust(affinity)` (the word `trust` moved by `trust_sway`, 0.3, of the affinity) is the trust to start a source on with `Trust::introduce(source, trust)`, so a friend is believed sooner than a stranger and a stranger sooner than an enemy, until their word is tested. `tests/social.rs` puts these together: a suspicion spreading along who gets on with whom, and an alibi clearing it only for those who hear it.
 
+## Everyday life (`life`)
+
+What an NPC does when no one is after anyone, so that a city goes on about its business and one that dropped everything has something to go back to. Needs and the errands they send NPCs on (a shop, a vending machine, a friend) are to come.
+
+**Routine** (`life::routine`). `Routine::new(blocks)` takes `Block { from, doing }`s - `from` in hours, 0 up to `DAY` (24), however long the game's days are; `doing` the game's own kind - puts them in order and leaves out any with no sense in it (None if nothing is left). Each block lasts till the next starts, and the last runs on past midnight into the first. `at(hour)` is what it does then; `next(hour)` what it does next and how many hours till then. For many NPCs sharing one routine, give each `routine.shifted(offset(tuning, its_number))`: up to `routine.leeway` (0.25 h) early or late, the same every day and every run.
+
 ## Learning and adapting (`think`)
 
 What an NPC learns, kept by the game per NPC, per squad or per faction, and weighing what the rest of the crate already does. Everything learned fades with time, so a player who changes their ways is met afresh; can be told to another at half strength (`tell`), so a squad comes to think alike; and, with `serde`, saved between sessions.

@@ -73,6 +73,12 @@ It is in five folders, and its alert phases besides.
 | `suspicion` | Suspecting the player of what no one saw them do: seen near trouble about when it happened; never certainty; told on weaker, at the teller's trust; cleared by an alibi (seen far off at the time) as far as it is believed; fading; warier for it without its regard changing. |
 | `relation` | What NPCs think of each other, from their factions and what has passed between them (time together, help, harm), easing back: enemies keep what they know to themselves, and a friend's word is trusted sooner than a stranger's. |
 
+### `life` - everyday life
+
+| Module | What it does |
+|--------|--------------|
+| `routine` | An NPC's day by the hour: what it does from when, the last thing running on past midnight into the first; what it does now and what next, and how long till then; each NPC keeping it a little early or late (up to a quarter of an hour, from its own number) so a street of them doesn't set off on the stroke of the hour. Generic over the game's own activities. |
+
 ### `think` - learning and adapting
 
 | Module | What it does |

@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 45] = [
+        let modules: [(&str, Vec<(String, f64)>); 46] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -269,6 +269,7 @@ impl Tuning {
             ("ties", self.ties.numbers()),
             ("passing", self.passing.numbers()),
             ("word", self.word.numbers()),
+            ("routine", self.routine.numbers()),
             ("suspicion", self.suspicion.numbers()),
             ("relation", self.relation.numbers()),
             ("lesson", self.lesson.numbers()),
@@ -289,7 +290,7 @@ impl Tuning {
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
                     "cover", "team", "roles", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
-                    "passing", "word", "suspicion", "relation", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
+                    "passing", "word", "routine", "suspicion", "relation", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
                 ]
                 .map(String::from),
             )
@@ -469,6 +470,10 @@ impl Tuning {
         c.some("roles.pursuers", self.roles.pursuers as f64);
         // At more than 1, the least independent would rely on itself less than not at all.
         c.fraction("priority.independence", self.priority.independence);
+
+        // At half a day or more, an NPC could keep its routine nearer the next day's than its own.
+        c.within("routine.leeway", self.routine.leeway, 0.0, 12.0);
+        c.below("routine.leeway", self.routine.leeway, "12, half a day", 12.0);
 
         let s = &self.suspicion;
         c.positive("suspicion.near", s.near);

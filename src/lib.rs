@@ -26,6 +26,8 @@
 //!   [`social::faction`]), what becomes of their own ([`social::ties`]), the trouble they keep
 //!   away from ([`social::trouble`]), how they take the player passing ([`social::passing`]), and
 //!   a city's crowd ([`social::crowd`]).
+//! - [`life`]: an NPC's everyday life, when no one is after anyone - its day by the hour
+//!   ([`life::routine`]).
 //! - [`orchestrate`]: optional - the modules run together as a guard's mind and a squad's: perceive, investigate, chase, search, join in, back to routine.
 //! - [`validate`]: checking a [`Tuning`] before it is used - every number, and the ones that contradict each other.
 //! - [`think`]: learning and adapting - what has worked for an NPC and what has not
@@ -82,6 +84,7 @@ macro_rules! tuning {
 }
 
 pub mod alert;
+pub mod life;
 pub mod navigation;
 pub mod orchestrate;
 pub mod perception;
@@ -220,6 +223,8 @@ pub struct Tuning {
     pub passing: crate::social::passing::Tuning,
     /// Passing word on, and taking it.
     pub word: crate::social::word::Tuning,
+    /// Keeping a routine.
+    pub routine: crate::life::routine::Tuning,
     /// Suspecting the player of what no one saw them do.
     pub suspicion: crate::social::suspicion::Tuning,
     /// What NPCs think of each other.
@@ -279,6 +284,7 @@ impl Tuning {
         ties: crate::social::ties::Tuning::DEFAULT,
         passing: crate::social::passing::Tuning::DEFAULT,
         word: crate::social::word::Tuning::DEFAULT,
+        routine: crate::life::routine::Tuning::DEFAULT,
         suspicion: crate::social::suspicion::Tuning::DEFAULT,
         relation: crate::social::relation::Tuning::DEFAULT,
         lesson: crate::think::lesson::Tuning::DEFAULT,
