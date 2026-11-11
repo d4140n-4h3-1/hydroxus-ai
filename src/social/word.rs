@@ -140,6 +140,20 @@ impl<T: Copy> Word<T> {
     }
 }
 
+impl<T> Word<T> {
+    /// How far one that holds it, with `trust` of its sources, believes it was so when it was
+    /// seen, from 0 to 1: how sure it is and how far it trusts the one it came from, however old.
+    /// For what it says of then - an alibi, say (see [`crate::social::suspicion`]) - where
+    /// [`Word::belief`] is for what it says of now.
+    pub fn credence(&self, tuning: &Tuning, trust: &Trust) -> f32 {
+        if !self.confidence.is_finite() {
+            return 0.0;
+        }
+        let source = if self.hops == 0 { 1.0 } else { trust.of(tuning, self.from) };
+        (self.confidence.clamp(0.0, 1.0) * source).clamp(0.0, 1.0)
+    }
+}
+
 /// How far an NPC trusts each source of word, from what it has made of their word so far.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -157,6 +171,21 @@ impl Trust {
     /// How far it trusts `source`, from 0 to 1.
     pub fn of(&self, tuning: &Tuning, source: u32) -> f32 {
         self.sources.iter().find(|s| s.0 == source).map_or(tuning.trust.clamp(0.0, 1.0), |s| s.1)
+    }
+
+    /// Starts trusting `source` as far as `trust`, from 0 to 1, rather than the tuning's `trust` -
+    /// a friend sooner, an enemy less (see [`crate::social::relation::trust`]) - unless its word
+    /// has been tested already: then what it has made of that stands.
+    pub fn introduce(&mut self, source: u32, trust: f32) {
+        if !trust.is_finite() {
+            return;
+        }
+        let trust = trust.clamp(0.0, 1.0);
+        match self.sources.iter_mut().find(|s| s.0 == source) {
+            Some(s) if s.2 == 0.0 => s.1 = trust,
+            Some(_) => {}
+            None => self.sources.push((source, trust, 0.0)),
+        }
     }
 
     /// `source`'s word proved right: it trusts it the more.
@@ -290,6 +319,9 @@ mod tests {
         assert_eq!((again.hops, again.from, again.witness), (2, 2, 1));
         // Twenty seconds on, half as good.
         assert!((seen.belief(&T, &trust, 10.0 + STALE_HALF_LIFE) - 0.5).abs() < 1.0e-6);
+        // But as good as ever of where they were then.
+        assert_eq!(seen.credence(&T, &trust), 1.0);
+        assert!((told.credence(&T, &trust) - RETOLD * TRUST).abs() < 1.0e-6);
     }
 
     #[test]
@@ -313,6 +345,21 @@ mod tests {
         let mut both = trust.clone();
         both.sources.extend(honest.sources.iter().copied());
         assert!(word.belief(&T, &both, 0.0) < same_from_nine.belief(&T, &both, 0.0) * 0.5);
+    }
+
+    #[test]
+    fn a_source_introduced_is_trusted_as_said_until_tested() {
+        let mut trust = Trust::new();
+        trust.introduce(1, 0.95);
+        trust.introduce(2, 0.2);
+        trust.introduce(3, f32::NAN);
+        assert_eq!((trust.of(&T, 1), trust.of(&T, 2), trust.of(&T, 3)), (0.95, 0.2, TRUST));
+        trust.refuted(&T, 1);
+        let tested = trust.of(&T, 1);
+        assert!(tested < 0.95);
+        // Tested, what it made of it stands.
+        trust.introduce(1, 1.0);
+        assert_eq!(trust.of(&T, 1), tested);
     }
 
     #[test]

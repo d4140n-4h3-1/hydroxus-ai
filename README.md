@@ -69,6 +69,8 @@ It is in five folders, and its alert phases besides.
 | `chat` | What NPCs talk about among themselves: news one has for another, told on as they talk; or, feeling strongly, what one thinks of the player, swaying the rest; or nothing much. |
 | `crowd` | A city's crowd: only so many NPCs, all about the player, one gone far off turning up again nearer by, out of sight, on the navmesh's pavement. |
 | `word` | News to act on, passed on: who saw what, where and when; firsthand or told, and how many times passed on; by voice (near, where it carries), radio (far, both need one) or alarm; believed as sure, as fresh and as trusted as it is - trust in each source learned from whether its word proves right. |
+| `suspicion` | Suspecting the player of what no one saw them do: seen near trouble about when it happened; never certainty; told on weaker, at the teller's trust; cleared by an alibi (seen far off at the time) as far as it is believed; fading; warier for it without its regard changing. |
+| `relation` | What NPCs think of each other, from their factions and what has passed between them (time together, help, harm), easing back: enemies keep what they know to themselves, and a friend's word is trusted sooner than a stranger's. |
 
 ### `think` - learning and adapting
 

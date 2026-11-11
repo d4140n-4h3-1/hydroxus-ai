@@ -20,6 +20,10 @@
 //! - [`trouble`]: one of them found lying, an alarm, gunfire - told on, and kept away from.
 //! - [`word`]: news to act on, passed on by voice, radio or alarm: who saw what, where, when,
 //!   firsthand or told, how sure, and how far the source is trusted.
+//! - [`suspicion`]: suspecting the player of what no one saw them do, from where they were seen;
+//!   told on, cleared by an alibi, and fading.
+//! - [`relation`]: what NPCs think of each other - from their factions and what has passed
+//!   between them - deciding what they tell each other and how far they believe it.
 //! - [`passing`]: greeting the player, tipping them off, nodding, keeping away, or glaring, as
 //!   they go by.
 
@@ -29,8 +33,10 @@ pub mod faction;
 pub mod group;
 pub mod opinion;
 pub mod passing;
+pub mod relation;
 pub mod report;
 pub mod rumour;
+pub mod suspicion;
 pub mod talk;
 pub mod ties;
 pub mod trouble;

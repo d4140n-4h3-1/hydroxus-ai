@@ -86,7 +86,7 @@ impl std::error::Error for Invalid {}
 /// Whether `field` is meant to go below zero: the regard thresholds below neutral, and how far to
 /// a group's leader's right each of it keeps (to its left, less than none).
 fn signed(field: &str) -> bool {
-    matches!(field, "opinion.wary" | "opinion.hostile") || field.starts_with("group.about_leader[") && field.ends_with(".0")
+    matches!(field, "opinion.wary" | "opinion.hostile" | "relation.kin" | "relation.share_above") || field.starts_with("group.about_leader[") && field.ends_with(".0")
 }
 
 /// The numbers in a field of a tuning, by name, however it holds them.
@@ -231,7 +231,7 @@ impl Tuning {
             ("faint", s.faint),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 42] = [
+        let modules: [(&str, Vec<(String, f64)>); 44] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -268,6 +268,8 @@ impl Tuning {
             ("ties", self.ties.numbers()),
             ("passing", self.passing.numbers()),
             ("word", self.word.numbers()),
+            ("suspicion", self.suspicion.numbers()),
+            ("relation", self.relation.numbers()),
             ("lesson", self.lesson.numbers()),
             ("habit", self.habit.numbers()),
             ("haunt", self.haunt.numbers()),
@@ -286,7 +288,7 @@ impl Tuning {
                     "alert", "detection", "bolts", "witness", "search", "pace", "investigate", "chase", "threat", "fire", "blind",
                     "cover", "team", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
-                    "passing", "word", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
+                    "passing", "word", "suspicion", "relation", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
                 ]
                 .map(String::from),
             )
@@ -462,6 +464,32 @@ impl Tuning {
         c.positive("word.stale_half_life", w.stale_half_life);
         c.fraction("word.trust", w.trust);
         c.fraction("word.trust_rate", w.trust_rate);
+
+        let s = &self.suspicion;
+        c.positive("suspicion.near", s.near);
+        c.positive("suspicion.within", s.within);
+        // An alibi only from further off than suspicion reaches: else one sighting both suspects and clears.
+        c.positive("suspicion.far", s.far);
+        c.below("suspicion.near", s.near, "suspicion.far", s.far);
+        c.positive("suspicion.alibi_within", s.alibi_within);
+        c.fraction("suspicion.most", s.most);
+        c.fraction("suspicion.retold", s.retold);
+        c.fraction("suspicion.alibi", s.alibi);
+        c.positive("suspicion.half_life", s.half_life);
+        c.fraction("suspicion.forgotten", s.forgotten);
+        c.some("suspicion.kept", s.kept as f64);
+        c.positive("suspicion.kept_for", s.kept_for);
+        c.fraction("suspicion.wariness", s.wariness);
+
+        let r = &self.relation;
+        c.within("relation.kin", r.kin, -1.0, 1.0);
+        c.fraction("relation.outsider", r.outsider);
+        c.within("relation.share_above", r.share_above, -1.0, 1.0);
+        c.fraction("relation.trust_sway", r.trust_sway);
+        c.fraction("relation.most_together", r.most_together);
+        c.fraction("relation.helped", r.helped);
+        c.fraction("relation.harmed", r.harmed);
+        c.positive("relation.half_life", r.half_life);
 
         let l = &self.lesson;
         c.fraction("lesson.rate", l.rate);

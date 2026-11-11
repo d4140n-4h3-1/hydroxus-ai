@@ -218,6 +218,10 @@ pub struct Tuning {
     pub passing: crate::social::passing::Tuning,
     /// Passing word on, and taking it.
     pub word: crate::social::word::Tuning,
+    /// Suspecting the player of what no one saw them do.
+    pub suspicion: crate::social::suspicion::Tuning,
+    /// What NPCs think of each other.
+    pub relation: crate::social::relation::Tuning,
     /// Learning what works.
     pub lesson: crate::think::lesson::Tuning,
     /// Learning the player's habits.
@@ -272,6 +276,8 @@ impl Tuning {
         ties: crate::social::ties::Tuning::DEFAULT,
         passing: crate::social::passing::Tuning::DEFAULT,
         word: crate::social::word::Tuning::DEFAULT,
+        suspicion: crate::social::suspicion::Tuning::DEFAULT,
+        relation: crate::social::relation::Tuning::DEFAULT,
         lesson: crate::think::lesson::Tuning::DEFAULT,
         habit: crate::think::habit::Tuning::DEFAULT,
         haunt: crate::think::haunt::Tuning::DEFAULT,
