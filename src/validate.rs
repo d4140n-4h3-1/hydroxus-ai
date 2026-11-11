@@ -467,6 +467,8 @@ impl Tuning {
         c.fraction("word.trust_rate", w.trust_rate);
 
         c.some("roles.pursuers", self.roles.pursuers as f64);
+        // At more than 1, the least independent would rely on itself less than not at all.
+        c.fraction("priority.independence", self.priority.independence);
 
         let s = &self.suspicion;
         c.positive("suspicion.near", s.near);

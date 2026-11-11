@@ -350,3 +350,83 @@ fn searching_on_what_it_saw_itself_it_keeps_to_that_over_weaker_word_and_takes_u
     world.step(1.0 / 60.0);
     assert_eq!(world.sentries[0].last_seen(), Some(at(80.0, 35.0)));
 }
+
+// Individual differences (3.4): one AI, sentries that take the same event differently.
+
+fn spotted_after(traits: hydroxus_ai::tactics::priority::Traits) -> f32 {
+    let sentry = Sentry::new(Role::Sentry).with_traits(traits);
+    let mut world = World::new(Tuning::DEFAULT, vec![(sentry, at(10.0, 20.0), EAST)], at(32.0, 23.0), 0.0);
+    while world.t < 30.0 && world.sentries[0].alert().is_none() {
+        world.step(1.0 / 60.0);
+    }
+    world.log.iter().find(|&&(_, _, h)| h == Happened::Spotted).map_or(f32::INFINITY, |&(t, _, _)| t)
+}
+
+#[test]
+fn the_observant_notice_sooner() {
+    use hydroxus_ai::tactics::priority::Traits;
+    let sharp = spotted_after(Traits { observant: 0.95, ..Traits::NEUTRAL });
+    let middling = spotted_after(Traits::NEUTRAL);
+    let dull = spotted_after(Traits { observant: 0.05, ..Traits::NEUTRAL });
+    println!("spotted after: observant {sharp:.2} s, middling {middling:.2} s, unobservant {dull:.2} s");
+    assert!(sharp < middling && middling < dull && dull.is_finite(), "{sharp} {middling} {dull}");
+    assert!(dull > sharp * 1.5);
+}
+
+#[test]
+fn the_social_call_out_what_they_saw_further_and_believe_what_they_are_told_more() {
+    use hydroxus_ai::tactics::priority::Traits;
+    // One sees the player; another 14 m off, facing away, sees nothing - a shout from one
+    // middling carries 12 m.
+    let told = |sociability: f32| {
+        let teller = Sentry::new(Role::Sentry).with_traits(Traits { sociability, ..Traits::NEUTRAL });
+        let other = Sentry::new(Role::Sentry);
+        let mut world = World::new(Tuning::DEFAULT, vec![(teller, at(30.0, 20.0), EAST), (other, at(16.0, 20.0), -EAST)], at(40.0, 20.0), 0.0);
+        while world.t < 10.0 {
+            world.step(1.0 / 60.0);
+        }
+        assert!(world.log.iter().any(|&(_, s, h)| s == 0 && h == Happened::Spotted));
+        world.log.iter().any(|&(_, s, h)| s == 1 && h == Happened::Told)
+    };
+    assert!(told(0.95), "an outgoing one is heard 14 m off");
+    assert!(!told(0.05) && !told(0.5), "a quiet or middling one is not");
+    // Word passed on three times and ten seconds old: believed 0.25, under the 0.3 it takes to go.
+    let ai = Tuning::DEFAULT;
+    let word = Word::seen((), at(50.0, 20.0), 0.0, 9).passed_on(&ai.word, 9).passed_on(&ai.word, 8).passed_on(&ai.word, 7);
+    let acts = |sociability: f32| Sentry::new(Role::Sentry).with_traits(Traits { sociability, ..Traits::NEUTRAL }).hear_word(&ai, word, 10.0);
+    assert!(acts(0.9), "the outgoing take it up");
+    assert!(!acts(0.5) && !acts(0.1), "the rest doubt it");
+}
+
+#[test]
+fn the_independent_go_by_what_they_saw_over_what_they_are_told() {
+    use hydroxus_ai::tactics::priority::Traits;
+    let ai = Tuning::DEFAULT;
+    // Each searching where it lost the player itself; at a given time after, the same fresh word
+    // from one of its own (believed 0.56) of somewhere else.
+    let takes_word = |independence: f32, after: f32| {
+        let traits = Traits { independence, ..Traits::NEUTRAL };
+        let start = at(45.0, 20.0);
+        let sentry = Sentry::new(Role::Sentry).with_traits(traits);
+        let mut world = World::new(ai, vec![(sentry, at(35.0, 20.0), EAST)], start, 0.0);
+        while world.t < 5.0 && world.sentries[0].alert() != Some(Alert::Alert) {
+            world.step(1.0 / 60.0);
+        }
+        world.player = at(500.0, 500.0);
+        while world.sentries[0].alert() != Some(Alert::Evasion) {
+            world.step(1.0 / 60.0);
+        }
+        let lost = world.t;
+        while world.t < lost + after {
+            world.step(1.0 / 60.0);
+        }
+        assert_eq!(world.sentries[0].alert(), Some(Alert::Evasion));
+        let now = world.squad.now();
+        world.sentries[0].hear_word(&ai, Word::seen((), at(80.0, 35.0), now, 1).passed_on(&ai.word, 1), now)
+    };
+    // A quarter of a minute on: one that goes by whatever it is told takes it; the rest keep to
+    // what they saw.
+    assert!(takes_word(0.0, 15.0) && !takes_word(0.5, 15.0) && !takes_word(1.0, 15.0));
+    // Half a minute on, its own sighting old: the middling take it too; its own judge still not.
+    assert!(takes_word(0.5, 30.0) && !takes_word(1.0, 30.0));
+}

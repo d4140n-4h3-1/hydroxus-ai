@@ -287,8 +287,10 @@ The conduct reasoner's order is fixed by role. `priority::weigh(tuning, traits, 
 | urgency | `Context::urgency`, 0–1 | responding (chase, fight, shoot back, shelter, report) up to ×1.5; company and routine down as much |
 | threat | `Context::threat`, 0–1 | shelter and back away up to ×2, scaled by caution minus aggression |
 | confidence | `Context::sighting`, `Context::lead`, each `Option` 0–1 | chase and search by the sighting, investigate by the lead, ×0.5 to ×1.5 |
-| commitment | `Context::doing` (conduct, seconds) | what it is doing, up to ×1.3 once it has been at it `committed_after` (4 s) |
-| traits | `Traits { aggression, caution, curiosity }`, 0.5 neutral | chase, fight, shoot back / shelter, back away, watch / investigate, each ×0.6 to ×1.4 |
+| commitment | `Context::doing` (conduct, seconds) | what it is doing, up to ×1.3 once it has been at it `committed_after` (4 s), the bonus times `self_reliance` (×0 to ×2 by independence) |
+| traits | `Traits { aggression, caution, curiosity, .. }`, 0.5 neutral | chase, fight, shoot back / shelter, back away, watch / investigate, each ×0.6 to ×1.4 |
+
+Three more traits bear on perception and talk rather than on choice: `observant` (`keenness`, ×0.6 to ×1.4 on the eagerness awareness fills with, seeing and hearing), `sociability` (`voice`, the same on how far its voice carries word; `credulity`, the same on its belief in word told it, never in what it saw), and `independence` (`self_reliance`, ×0 to ×2 by `priority.independence`, 1: how much surer word must be than its own account to override it, and the commitment bonus). `Traits::from_seed(seed, spread)` gives an NPC traits of its own, the same every run. The orchestration layer applies all of them; `tests/group.rs` measures them: spotted after 1.85 s observant, 2.48 s middling, 3.78 s unobservant; an outgoing sentry's shout heard 14 m off where a middling one's is not, and word believed 0.25 taken up by the outgoing only; the same fresh word taken 15 s after a loss by one that goes by what it is told, 30 s after by the middling, and not at all by its own judge.
 
 Every factor is exactly 1 with a default `Context` and neutral `Traits`, so passing nothing changes nothing. A bias can weigh a conduct down but never opens one the reasoner's considerations shut. `factors(...)` returns each factor separately, for a debug overlay showing why an NPC did what it did. `validate` keeps confidence and trait weights under 1, so nothing is ever weighed to nothing.
 

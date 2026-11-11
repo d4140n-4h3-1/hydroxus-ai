@@ -474,15 +474,19 @@ impl Sentry {
         if self.alert == Some(Alert::Alert) || !word.at.iter().all(|v| v.is_finite()) {
             return false;
         }
+        // What it is told, it believes as readily as it is social; what it saw, as it saw it.
         let belief = word.belief(&tuning.word, &self.trust, now);
-        // Searching already on what it believes clearly more - its own sighting, or better word -
-        // it keeps to that: two accounts of where they are, and it goes by the surer.
+        let belief = if word.firsthand() { belief } else { (belief * priority::credulity(&tuning.priority, &self.traits)).min(1.0) };
+        // Searching already on an account of where they are - its own sighting, or earlier word -
+        // it takes this one over that only if it is clearly surer: by `switch_lead_by`, times how
+        // much it relies on itself (nothing, for one that goes by whatever it is told).
         let o = &tuning.orchestrate;
         let holding = match self.alert {
             Some(Alert::Evasion) => self.sighting.0 * 0.5f32.powf(self.sighting.1 / o.sighting_half_life.max(1.0e-3)),
             _ => 0.0,
         };
-        if belief < o.believe || holding >= belief + o.switch_lead_by {
+        let margin = o.switch_lead_by * priority::self_reliance(&tuning.priority, &self.traits);
+        if belief < o.believe || (holding > 0.0 && belief < holding + margin) {
             self.memory.note(&tuning.memory, Record::new(Kind::Event).at(word.at).secondhand().strength(belief.max(tuning.memory.forgotten)).importance(0.1));
             self.happened.push(Happened::Doubted);
             return false;
@@ -599,7 +603,7 @@ impl Sentry {
     fn eagerness(&self, tuning: &crate::Tuning) -> f32 {
         let searching = if self.alert == Some(Alert::Evasion) { tuning.detection.searching } else { 1.0 };
         let attentive = if self.attentive.is_some() { tuning.orchestrate.attentive_keenness.max(0.0) } else { 1.0 };
-        self.wariness.keenness(&tuning.alert) * searching * attentive
+        self.wariness.keenness(&tuning.alert) * searching * attentive * priority::keenness(&tuning.priority, &self.traits)
     }
 
     /// It looked at `spot`, and found nothing: it stays attentive that way a while, and takes up
@@ -1092,10 +1096,12 @@ impl Squad {
             }
             let word = Word::seen((), senses[i].player, self.now, i as u32).passed_on(&tuning.word, i as u32);
             let (from, radio) = (sentries[i].feet, sentries[i].radio);
+            // A social one calls it out further.
+            let words = word::Tuning { voice_range: tuning.word.voice_range * priority::voice(&tuning.priority, &sentries[i].traits), ..tuning.word };
             for j in (0..n).filter(|&j| j != i) {
                 let (to, theirs) = (sentries[j].feet, sentries[j].radio);
-                let reached = word::reaches(&tuning.word, Channel::Radio, from, to, (radio, theirs), || false)
-                    || word::reaches(&tuning.word, Channel::Voice, from, to, (radio, theirs), || clear(i, j));
+                let reached = word::reaches(&words, Channel::Radio, from, to, (radio, theirs), || false)
+                    || word::reaches(&words, Channel::Voice, from, to, (radio, theirs), || clear(i, j));
                 if reached {
                     sentries[j].hear_word(tuning, word, self.now);
                 }
