@@ -190,6 +190,13 @@ impl Sight {
     ) -> bool {
         let seeing = seeing.into();
         let to = them - feet;
+        // Further off than anything could be seen, however lit, however held, out of whichever
+        // corner of its eye: no need to work out which way it faces. The same answer as below,
+        // found without the trigonometry - which, asked of every pair in a crowd, was most of it.
+        let most = self.range * self.dark.max(1.0) * self.crouched.max(self.crawling).max(1.0) * self.peripheral.max(1.0);
+        if to.norm_squared() > most * most {
+            return false;
+        }
         let across = flat(to).norm();
         // Straight above or below its feet: not in front of it.
         if across <= 1.0e-3 {

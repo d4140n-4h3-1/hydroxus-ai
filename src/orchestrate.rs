@@ -1069,8 +1069,12 @@ impl Squad {
         let chasing: Vec<usize> = (0..n).filter(|&i| sentries[i].alert == Some(Alert::Alert)).collect();
         let chasers: Vec<Chaser> = chasing.iter().map(|&i| sentries[i].chaser(tuning, watches[i].sees_player)).collect();
         let parts = roles::parts(&tuning.roles, &chasers);
+        let mut part_of = vec![None; n];
+        for (k, &i) in chasing.iter().enumerate() {
+            part_of[i] = Some(parts[k]);
+        }
         for (i, sentry) in sentries.iter_mut().enumerate() {
-            let part = chasing.iter().position(|&c| c == i).map(|k| parts[k]);
+            let part = part_of[i];
             if matches!(part, Some(Part::CutOff { .. })) && !matches!(sentry.part, Some(Part::CutOff { .. })) {
                 sentry.happened.push(Happened::CuttingOff);
             }
@@ -1144,10 +1148,10 @@ impl Squad {
         let mut thoughts = Vec::with_capacity(n);
         for (i, sentry) in sentries.iter_mut().enumerate() {
             taken.clear();
-            taken.extend(goals.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, g)| *g));
             others.clear();
-            // Only a searcher asks where the other searchers are.
+            // Only a searcher asks where the other searchers are, and where they are going.
             if searchers[i].is_some() {
+                taken.extend(goals.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, g)| *g));
                 others.extend(searchers.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, f)| *f));
             }
             let (intent, conduct) = sentry.decide(tuning, reasoners, &self.search, mesh, &taken, &others, dt);
