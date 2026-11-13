@@ -177,6 +177,8 @@ pub struct Tuning {
     pub team: crate::tactics::team::Tuning,
     /// Who runs after someone and who cuts them off.
     pub roles: crate::tactics::roles::Tuning,
+    /// High ground worth going to.
+    pub vantage: crate::tactics::vantage::Tuning,
     /// A flying sentry's patrol.
     pub patrol: crate::tactics::patrol::Tuning,
     /// The ground as a walker takes it.
@@ -261,6 +263,7 @@ impl Tuning {
         cover: crate::tactics::cover::Tuning::DEFAULT,
         team: crate::tactics::team::Tuning::DEFAULT,
         roles: crate::tactics::roles::Tuning::DEFAULT,
+        vantage: crate::tactics::vantage::Tuning::DEFAULT,
         patrol: crate::tactics::patrol::Tuning::DEFAULT,
         grid: crate::navigation::grid::Tuning::DEFAULT,
         navmesh: crate::navigation::navmesh::Tuning::DEFAULT,

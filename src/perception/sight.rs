@@ -17,6 +17,12 @@
 //! is to see by - dark or light, fog or none - is a [`Seeing`]; a plain `bool`, in the dark or
 //! not, is one with no fog.
 //!
+//! It does not look up. Someone well over it - on a roof, a balcony, a walkway, higher than
+//! [`Sight::above`] over its feet and steeper than [`Sight::above_angle`] over its eyes - goes
+//! unseen, unless it is looking up, having been shot at from up there ([`Seeing::looking_up`]),
+//! or is hunting them already and has watched them climb. Up high itself, it sees further
+//! ([`Sight::height_reach`]): over what would stop its eye on the ground, and further off.
+//!
 //! This only says whether they are where it could see them. Whether anything is in the way is
 //! the game's to find out, with a ray from its eyes.
 
@@ -60,17 +66,26 @@ impl Fog {
     }
 }
 
-/// What there is to see by: whether it is dark, and the fog, if there is any. From a `bool`, in
-/// the dark or not, with no fog.
+/// What there is to see by: whether it is dark, and the fog, if there is any; and whether the
+/// one looking is looking up, having been shot at from above (see [`Sight::overhead`]). From a
+/// `bool`, in the dark or not, with no fog, looking straight ahead.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Seeing {
     pub dark: bool,
     pub fog: Option<Fog>,
+    pub looking_up: bool,
 }
 
 impl From<bool> for Seeing {
     fn from(dark: bool) -> Self {
-        Self { dark, fog: None }
+        Self { dark, fog: None, looking_up: false }
+    }
+}
+
+impl Seeing {
+    /// The same to see by, looking up or not.
+    pub fn looking_up(self, up: bool) -> Self {
+        Self { looking_up: up, ..self }
     }
 }
 
@@ -107,6 +122,14 @@ pub struct Sight {
     /// How little of someone has to show through fog for it to make them out at all, from 0 to 1
     /// (see [`Fog::clear`]).
     pub faint: f32,
+    /// How far over its feet someone has to stand, in meters, and how steeply over its eyes, in
+    /// radians, to be up above it, where it does not look (see [`Sight::overhead`]).
+    pub above: f32,
+    pub above_angle: f32,
+    /// How much further it sees, of how far it would, for each meter its feet are over theirs; and
+    /// how many times as far at most.
+    pub height_reach: f32,
+    pub most_height_reach: f32,
 }
 
 impl Sight {
@@ -122,6 +145,10 @@ impl Sight {
         edge: 0.25,
         glimpse: 0.5,
         faint: 0.25,
+        above: 2.0,
+        above_angle: 15.0f32.to_radians(),
+        height_reach: 0.04,
+        most_height_reach: 1.5,
     };
 }
 
@@ -142,6 +169,20 @@ impl Sight {
             (_, Stance::Crawling) => self.crawling,
         };
         self.range * lit * low
+    }
+
+    /// Whether someone standing at `them` is up above an NPC standing at `feet`, where it does not
+    /// look unless it has reason to: more than [`Sight::above`] over its feet, and more than
+    /// [`Sight::above_angle`] over level from its eyes.
+    pub fn overhead(&self, feet: Vector3<f32>, them: Vector3<f32>) -> bool {
+        let rise = them.y - feet.y;
+        rise > self.above && rise > flat(them - feet).norm() * self.above_angle.tan()
+    }
+
+    /// How many times as far as it would, an NPC at `feet` sees someone at `them` below it: the
+    /// higher it stands over them, the further, up to [`Sight::most_height_reach`].
+    pub fn from_above(&self, feet: Vector3<f32>, them: Vector3<f32>) -> f32 {
+        (1.0 + self.height_reach * (feet.y - them.y).max(0.0)).min(self.most_height_reach.max(1.0))
     }
 
     /// How visible someone at `them` holding themselves in `stance` is to an NPC at `feet`, facing
@@ -169,7 +210,9 @@ impl Sight {
         let to = them - feet;
         let across = flat(to).norm();
         let clearly = flat(to).dot(&forward(heading)) >= across * self.cone.cos();
-        let reach = self.reach(alert, stance, seeing.dark) * if clearly { 1.0 } else { self.peripheral };
+        let reach = self.reach(alert, stance, seeing.dark)
+            * self.from_above(feet, them)
+            * if clearly { 1.0 } else { self.peripheral };
         let near = (1.0 - to.norm() / reach.max(1.0e-3)).clamp(0.0, 1.0);
         let shown = (self.edge + (1.0 - self.edge) * near) * if clearly { 1.0 } else { self.glimpse };
         shown * seeing.clear(feet, them)
@@ -193,7 +236,11 @@ impl Sight {
         // Further off than anything could be seen, however lit, however held, out of whichever
         // corner of its eye: no need to work out which way it faces. The same answer as below,
         // found without the trigonometry - which, asked of every pair in a crowd, was most of it.
-        let most = self.range * self.dark.max(1.0) * self.crouched.max(self.crawling).max(1.0) * self.peripheral.max(1.0);
+        let most = self.range
+            * self.dark.max(1.0)
+            * self.crouched.max(self.crawling).max(1.0)
+            * self.peripheral.max(1.0)
+            * self.most_height_reach.max(1.0);
         if to.norm_squared() > most * most {
             return false;
         }
@@ -202,8 +249,12 @@ impl Sight {
         if across <= 1.0e-3 {
             return false;
         }
+        // Up above it: unseen, unless it looks up, or is hunting them and saw them climb.
+        if !seeing.looking_up && alert != Some(Alert::Alert) && self.overhead(feet, them) {
+            return false;
+        }
         let ahead = flat(to).dot(&forward(heading));
-        let reach = self.reach(alert, stance, seeing.dark);
+        let reach = self.reach(alert, stance, seeing.dark) * self.from_above(feet, them);
         let reach = if ahead >= across * self.cone.cos() {
             reach
         } else if ahead >= across * self.side.cos() {
@@ -265,7 +316,7 @@ mod tests {
     const FOG: Fog = Fog { density: 0.035, start: 3.0, base_height: 0.0, height_falloff: 0.03 };
 
     fn in_fog() -> Seeing {
-        Seeing { dark: false, fog: Some(FOG) }
+        Seeing { dark: false, fog: Some(FOG), looking_up: false }
     }
 
     #[test]
@@ -290,8 +341,33 @@ mod tests {
         let low = FOG.clear(Vector3::zeros(), Vector3::new(0.0, 0.0, 30.0));
         let high = FOG.clear(Vector3::new(0.0, 40.0, 0.0), Vector3::new(0.0, 40.0, 30.0));
         assert!(high > low, "{high} over {low}");
-        assert_eq!(Seeing::from(true), Seeing { dark: true, fog: None });
+        assert_eq!(Seeing::from(true), Seeing { dark: true, fog: None, looking_up: false });
         assert_eq!(Seeing::default().clear(Vector3::zeros(), Vector3::new(0.0, 0.0, 500.0)), 1.0);
+    }
+
+    #[test]
+    fn it_does_not_look_up_unless_shot_at_from_above_or_hunting() {
+        let sight = Sight::default();
+        let roof = Vector3::new(0.0, 6.0, 8.0);
+        for alert in [None, Some(Alert::Caution), Some(Alert::Evasion)] {
+            assert!(!sight.could_see(alert, Vector3::zeros(), 0.0, roof, Stance::Standing, false), "on a roof near it, {alert:?}");
+            let up = Seeing::from(false).looking_up(true);
+            assert!(sight.could_see(alert, Vector3::zeros(), 0.0, roof, Stance::Standing, up), "looking up, {alert:?}");
+        }
+        assert!(sight.could_see(Some(Alert::Alert), Vector3::zeros(), 0.0, roof, Stance::Standing, false), "hunting them");
+        // A step or a rise is no higher ground; nor is a roof far off, in front of its eyes.
+        assert!(sight.could_see(None, Vector3::zeros(), 0.0, Vector3::new(0.0, 1.5, 8.0), Stance::Standing, false));
+        assert!(sight.could_see(None, Vector3::zeros(), 0.0, Vector3::new(0.0, 5.0, 28.0), Stance::Standing, false));
+    }
+
+    #[test]
+    fn up_high_it_sees_further() {
+        let sight = Sight::default();
+        let ground = Vector3::new(0.0, 0.0, 36.0);
+        assert!(!sight.could_see(None, Vector3::zeros(), 0.0, ground, Stance::Standing, false), "level, too far");
+        assert!(sight.could_see(None, Vector3::new(0.0, 8.0, 0.0), 0.0, ground, Stance::Standing, false), "from 8 m up");
+        assert_eq!(sight.from_above(Vector3::new(0.0, 100.0, 0.0), ground), 1.5, "no more than so far");
+        assert_eq!(sight.from_above(Vector3::zeros(), Vector3::new(0.0, 5.0, 0.0)), 1.0, "looking up, no further");
     }
 
     #[test]

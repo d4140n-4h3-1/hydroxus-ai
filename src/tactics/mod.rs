@@ -12,6 +12,7 @@
 //! - [`fire`]: when and how wide an armed NPC shoots: from how far, how often, facing how nearly.
 //! - [`blind`]: shot at by someone it cannot see, firing blind back where the shots came from.
 //! - [`cover`]: a bystander running from a shooting, to somewhere it cannot be seen from.
+//! - [`vantage`]: high ground near a spot, to look out over it from, or shoot down from.
 //! - [`roles`]: parts in a chase - who runs after someone and who cuts them off.
 //! - [`team`]: fighting as a team: shared sightings, targets, cover, flanking, covering fire.
 //! - [`patrol`]: a flying sentry's patrol, search and Alert, and its flight along its route.
@@ -36,3 +37,4 @@ pub mod search;
 pub mod team;
 pub mod threat;
 pub mod utility;
+pub mod vantage;
