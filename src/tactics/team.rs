@@ -22,7 +22,6 @@ use crate::{
     },
 };
 use nalgebra::Vector3;
-use std::collections::HashMap;
 
 /// How long what a team saw of an enemy stays worth acting on, in seconds.
 pub const INTEL_TIME: f32 = 8.0;
@@ -156,43 +155,74 @@ impl Intel {
 
 /// Which ground a team's enemies can see: for every polygon of the navmesh, how many of them could
 /// see one standing in the middle of it.
+///
+/// A byte a polygon, looked up by index: a route that keeps out of their sight asks it of every
+/// polygon it looks at (see [`Exposure::cost`]).
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct Exposure(HashMap<Poly, u8>);
+pub struct Exposure {
+    seen: Vec<u8>,
+    /// How many polygons any of them sees.
+    exposed: usize,
+}
 
 impl Exposure {
     /// Works it out over `mesh` for enemies standing at `enemies`: each that is within
     /// [`EXPOSURE_RANGE`] of the chest - `chest` meters over the floor - of one standing in the
     /// middle of a polygon, and that `sees` it there from where it stands.
     pub fn survey(tuning: &Tuning, mesh: &NavMesh, enemies: &[Vector3<f32>], chest: f32, sees: impl Fn(Vector3<f32>, Vector3<f32>) -> bool) -> Self {
-        let mut seen = HashMap::new();
-        if enemies.is_empty() {
-            return Self(seen);
+        let mut exposure = Self::default();
+        if !enemies.is_empty() {
+            exposure.survey_part(tuning, mesh, enemies, chest, sees, 0..mesh.len());
         }
-        for n in 0..mesh.len() as Poly {
-            if mesh.area_of(n) <= 0.0 {
-                continue;
-            }
-            let at = mesh.centre(n) + Vector3::y() * chest;
-            let seeing = enemies
-                .iter()
-                .filter(|&&enemy| (enemy - at).norm() < tuning.exposure_range)
-                .filter(|&&enemy| sees(enemy, at))
-                .count();
-            if seeing > 0 {
-                seen.insert(n, seeing.min(255) as u8);
+        exposure
+    }
+
+    /// As [`Exposure::survey`], but only of the polygons numbered `polys`, the rest left as they
+    /// were: a survey spread over many frames, a slice each, rather than all at once - a ray for
+    /// every polygon and every enemy near it, which with many enemies on a big navmesh is tens
+    /// of milliseconds.
+    pub fn survey_part(
+        &mut self,
+        tuning: &Tuning,
+        mesh: &NavMesh,
+        enemies: &[Vector3<f32>],
+        chest: f32,
+        sees: impl Fn(Vector3<f32>, Vector3<f32>) -> bool,
+        polys: std::ops::Range<usize>,
+    ) {
+        if self.seen.len() != mesh.len() {
+            self.seen = vec![0; mesh.len()];
+            self.exposed = 0;
+        }
+        for n in polys.start.min(mesh.len())..polys.end.min(mesh.len()) {
+            let seeing = if mesh.area_of(n as Poly) <= 0.0 {
+                0
+            } else {
+                let at = mesh.centre(n as Poly) + Vector3::y() * chest;
+                enemies
+                    .iter()
+                    .filter(|&&enemy| (enemy - at).norm() < tuning.exposure_range)
+                    .filter(|&&enemy| sees(enemy, at))
+                    .count()
+                    .min(255) as u8
+            };
+            let was = std::mem::replace(&mut self.seen[n], seeing);
+            match (was > 0, seeing > 0) {
+                (false, true) => self.exposed += 1,
+                (true, false) => self.exposed -= 1,
+                _ => (),
             }
         }
-        Self(seen)
     }
 
     /// Whether it has anything in it: any enemies known of, seeing anywhere.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.exposed == 0
     }
 
     /// How many of the enemies can see polygon `n`.
     pub fn at(&self, n: Poly) -> u8 {
-        self.0.get(&n).copied().unwrap_or(0)
+        self.seen.get(n as usize).copied().unwrap_or(0)
     }
 
     /// How much dearer a meter across polygon `n` is, for a route that keeps out of their sight.
@@ -307,6 +337,38 @@ impl Stuck {
             self.since += dt;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod exposure_tests {
+    use super::*;
+    use crate::navigation::grid::WalkGrid;
+
+    #[test]
+    fn a_survey_in_slices_comes_to_the_same_as_one_all_at_once() {
+        let mut grid = WalkGrid::new(40, 40, 1.0);
+        for z in 0..40 {
+            for x in 0..40 {
+                grid.set(x, z, !(x == 20 && z < 30));
+            }
+        }
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
+        let enemies = [Vector3::new(5.0, 0.0, 5.0)];
+        // Seen from the enemy's side of the wall, along x.
+        let sees = |e: Vector3<f32>, at: Vector3<f32>| (e.x < 20.0) == (at.x < 20.0) || at.z > 30.0;
+        let whole = Exposure::survey(&Tuning::DEFAULT, &mesh, &enemies, 1.4, sees);
+        let mut sliced = Exposure::default();
+        for start in (0..mesh.len()).step_by(7) {
+            sliced.survey_part(&Tuning::DEFAULT, &mesh, &enemies, 1.4, sees, start..start + 7);
+        }
+        assert_eq!(whole, sliced);
+        assert!(!whole.is_empty());
+        // The enemy gone: slice by slice, nothing is seen any more.
+        for start in (0..mesh.len()).step_by(7) {
+            sliced.survey_part(&Tuning::DEFAULT, &mesh, &[], 1.4, sees, start..start + 7);
+        }
+        assert!(sliced.is_empty());
     }
 }
 

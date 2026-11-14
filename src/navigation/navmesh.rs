@@ -112,6 +112,45 @@ type Side = (Vec<(u32, u32)>, (isize, isize));
 /// polygon, by which of its portals.
 type Reached = ([f32; 2], f32, Option<(Poly, usize)>);
 
+/// What a search over a navmesh has reached so far: for each polygon, where it was entered, the
+/// cost to there, and from which polygon by which of its portals - kept from one search to the
+/// next, each thread its own, and marked with the search it is from, so that a search neither
+/// hashes nor clears nor allocates, however many polygons it reaches (see [`NavMesh::corridor`]).
+#[derive(Default)]
+struct Reach {
+    search: u32,
+    marks: Vec<u32>,
+    reached: Vec<Reached>,
+}
+
+impl Reach {
+    /// Starts a new search over `polygons` polygons, with none reached.
+    fn begin(&mut self, polygons: usize) {
+        if self.marks.len() < polygons {
+            self.marks.resize(polygons, 0);
+            self.reached.resize(polygons, ([0.0; 2], 0.0, None));
+        }
+        self.search = self.search.wrapping_add(1);
+        if self.search == 0 {
+            self.marks.fill(0);
+            self.search = 1;
+        }
+    }
+
+    fn get(&self, n: Poly) -> Option<&Reached> {
+        (self.marks[n as usize] == self.search).then(|| &self.reached[n as usize])
+    }
+
+    fn set(&mut self, n: Poly, reached: Reached) {
+        self.marks[n as usize] = self.search;
+        self.reached[n as usize] = reached;
+    }
+}
+
+thread_local! {
+    static REACH: std::cell::RefCell<Reach> = std::cell::RefCell::new(Reach::default());
+}
+
 /// What came of a search over the navmesh for a route.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Open {
@@ -641,21 +680,35 @@ impl NavMesh {
             return None;
         }
         // Where each polygon reached was entered, the cost to there, and from which polygon by
-        // which of its portals - only for those reached, so that a short search costs little
-        // however big the navmesh.
-        let mut best: HashMap<Poly, Reached> = HashMap::new();
+        // which of its portals (see `Reach`).
+        REACH.with(|reach| {
+            let mut best = reach.borrow_mut();
+            self.corridor_in(&mut best, (from, start), (to, goal), within, extra)
+        })
+    }
+
+    /// [`NavMesh::corridor`], keeping what it reaches in `best`.
+    fn corridor_in(
+        &self,
+        best: &mut Reach,
+        (from, start): (Poly, [f32; 2]),
+        (to, goal): (Poly, [f32; 2]),
+        within: f32,
+        extra: &dyn Fn(Poly) -> f32,
+    ) -> Option<Vec<(Poly, usize)>> {
+        best.begin(self.polygons.len());
         let mut open = BinaryHeap::new();
-        best.insert(from, (start, 0.0, None));
+        best.set(from, (start, 0.0, None));
         open.push(Open { cost: 0.0, estimate: distance(start, goal), poly: from });
         while let Some(Open { cost, poly, .. }) = open.pop() {
-            let (at, so_far, _) = best[&poly];
+            let (at, so_far, _) = *best.get(poly)?;
             if cost > so_far {
                 continue;
             }
             if poly == to {
                 let mut corridor = Vec::new();
                 let mut n = to;
-                while let Some((back, portal)) = best[&n].2 {
+                while let Some((back, portal)) = best.get(n).and_then(|r| r.2) {
                     corridor.push((back, portal));
                     n = back;
                 }
@@ -672,8 +725,8 @@ impl NavMesh {
                 if cost > within {
                     continue;
                 }
-                if best.get(&portal.to).is_none_or(|&(_, c, _)| cost < c) {
-                    best.insert(portal.to, (through, cost, Some((poly, k))));
+                if best.get(portal.to).is_none_or(|&(_, c, _)| cost < c) {
+                    best.set(portal.to, (through, cost, Some((poly, k))));
                     open.push(Open { cost, estimate: cost + distance(through, goal), poly: portal.to });
                 }
             }
@@ -821,15 +874,28 @@ impl NavMesh {
 
     /// [`NavMesh::entries_from`], weighted, and not generic (see [`NavMesh::route_by`]).
     fn entries_by(&self, feet: Vector3<f32>, within: f32, extra: &dyn Fn(Poly) -> f32) -> HashMap<Poly, ([f32; 2], f32)> {
-        let mut best: HashMap<Poly, ([f32; 2], f32)> = HashMap::new();
         let Some(from) = self.nearest(feet) else {
             return HashMap::new();
         };
+        // Searched in a `Reach`, which neither hashes nor allocates; only what it reached is put
+        // into the map handed back, once each.
+        REACH.with(|reach| {
+            let mut best = reach.borrow_mut();
+            let mut found = Vec::new();
+            self.entries_in(&mut best, &mut found, from, feet, within, extra);
+            found.into_iter().filter_map(|n| best.get(n).map(|&(at, cost, _)| (n, (at, cost)))).collect()
+        })
+    }
+
+    /// [`NavMesh::entries_by`], keeping what it reaches in `best` and which polygons in `found`.
+    fn entries_in(&self, best: &mut Reach, found: &mut Vec<Poly>, from: Poly, feet: Vector3<f32>, within: f32, extra: &dyn Fn(Poly) -> f32) {
+        best.begin(self.polygons.len());
         let mut open = BinaryHeap::new();
-        best.insert(from, ([feet.x, feet.z], 0.0));
+        best.set(from, ([feet.x, feet.z], 0.0, None));
+        found.push(from);
         open.push(Open { cost: 0.0, estimate: 0.0, poly: from });
         while let Some(Open { cost, poly, .. }) = open.pop() {
-            let (at, so_far) = best[&poly];
+            let Some(&(at, so_far, _)) = best.get(poly) else { continue };
             if cost > so_far {
                 continue;
             }
@@ -843,13 +909,15 @@ impl NavMesh {
                 if cost > within {
                     continue;
                 }
-                if best.get(&portal.to).is_none_or(|&(_, c)| cost < c) {
-                    best.insert(portal.to, (through, cost));
-                    open.push(Open { cost, estimate: cost, poly: portal.to });
+                match best.get(portal.to) {
+                    Some(&(_, c, _)) if cost >= c => continue,
+                    Some(_) => (),
+                    None => found.push(portal.to),
                 }
+                best.set(portal.to, (through, cost, None));
+                open.push(Open { cost, estimate: cost, poly: portal.to });
             }
         }
-        best
     }
 
     /// Whether `b` can be seen from `a` along the floor: floor all the way between them, at the
