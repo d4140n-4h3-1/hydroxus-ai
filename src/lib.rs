@@ -183,6 +183,8 @@ pub struct Tuning {
     pub roles: crate::tactics::roles::Tuning,
     /// High ground worth going to.
     pub vantage: crate::tactics::vantage::Tuning,
+    /// Keeping a crowd spread out.
+    pub spread: crate::tactics::spread::Tuning,
     /// Sharing out the AI's time.
     pub schedule: crate::schedule::Tuning,
     /// A flying sentry's patrol.
@@ -270,6 +272,7 @@ impl Tuning {
         team: crate::tactics::team::Tuning::DEFAULT,
         roles: crate::tactics::roles::Tuning::DEFAULT,
         vantage: crate::tactics::vantage::Tuning::DEFAULT,
+        spread: crate::tactics::spread::Tuning::DEFAULT,
         schedule: crate::schedule::Tuning::DEFAULT,
         patrol: crate::tactics::patrol::Tuning::DEFAULT,
         grid: crate::navigation::grid::Tuning::DEFAULT,
