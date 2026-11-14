@@ -229,9 +229,13 @@ impl Tuning {
             ("edge", s.edge),
             ("glimpse", s.glimpse),
             ("faint", s.faint),
+            ("above", s.above),
+            ("above_angle", s.above_angle),
+            ("height_reach", s.height_reach),
+            ("most_height_reach", s.most_height_reach),
         ];
         c.numbers("sight", sight.iter().map(|&(name, value)| (name.to_string(), value as f64)).collect());
-        let modules: [(&str, Vec<(String, f64)>); 46] = [
+        let modules: [(&str, Vec<(String, f64)>); 48] = [
             ("alert", self.alert.numbers()),
             ("detection", self.detection.numbers()),
             ("bolts", self.bolts.numbers()),
@@ -278,6 +282,8 @@ impl Tuning {
             ("memory", self.memory.numbers()),
             ("orchestrate", self.orchestrate.numbers()),
             ("priority", self.priority.numbers()),
+            ("vantage", self.vantage.numbers()),
+            ("schedule", self.schedule.numbers()),
         ];
         for (module, numbers) in modules {
             c.numbers(module, numbers);
@@ -291,6 +297,7 @@ impl Tuning {
                     "cover", "team", "roles", "patrol", "grid", "navmesh", "walk", "wander", "steer", "trip", "ride", "drive", "traffic",
                     "flight", "group", "talk", "report", "crowd", "opinion", "rumour", "chat", "faction", "trouble", "ties",
                     "passing", "word", "routine", "suspicion", "relation", "lesson", "habit", "haunt", "memory", "orchestrate", "priority",
+                    "vantage", "schedule",
                 ]
                 .map(String::from),
             )

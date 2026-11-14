@@ -28,6 +28,9 @@
 //!   a city's crowd ([`social::crowd`]).
 //! - [`life`]: an NPC's everyday life, when no one is after anyone - its day by the hour
 //!   ([`life::routine`]).
+//! - [`schedule`]: sharing out the AI's time - which NPCs think each frame, by how important they
+//!   are, and an allowance of costly work a frame (routes, searches, surveys), with a profile for
+//!   slower machines.
 //! - [`orchestrate`]: optional - the modules run together as a guard's mind and a squad's: perceive, investigate, chase, search, join in, back to routine.
 //! - [`validate`]: checking a [`Tuning`] before it is used - every number, and the ones that contradict each other.
 //! - [`think`]: learning and adapting - what has worked for an NPC and what has not
@@ -88,6 +91,7 @@ pub mod life;
 pub mod navigation;
 pub mod orchestrate;
 pub mod perception;
+pub mod schedule;
 pub mod social;
 pub mod tactics;
 pub mod think;
@@ -179,6 +183,8 @@ pub struct Tuning {
     pub roles: crate::tactics::roles::Tuning,
     /// High ground worth going to.
     pub vantage: crate::tactics::vantage::Tuning,
+    /// Sharing out the AI's time.
+    pub schedule: crate::schedule::Tuning,
     /// A flying sentry's patrol.
     pub patrol: crate::tactics::patrol::Tuning,
     /// The ground as a walker takes it.
@@ -264,6 +270,7 @@ impl Tuning {
         team: crate::tactics::team::Tuning::DEFAULT,
         roles: crate::tactics::roles::Tuning::DEFAULT,
         vantage: crate::tactics::vantage::Tuning::DEFAULT,
+        schedule: crate::schedule::Tuning::DEFAULT,
         patrol: crate::tactics::patrol::Tuning::DEFAULT,
         grid: crate::navigation::grid::Tuning::DEFAULT,
         navmesh: crate::navigation::navmesh::Tuning::DEFAULT,

@@ -11,46 +11,26 @@ use crate::{
 };
 use nalgebra::Vector3;
 
-/// Where high ground is worth going to.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
-pub struct Tuning {
-    /// How far up over the spot it is to look out over, in meters, for it to be high ground at
-    /// all; and how much higher counts for any more - any higher, it only looks further down.
-    pub rise: f32,
-    pub most_rise: f32,
-    /// How far from the spot, along the ground, it may be, in meters; and how far a walk away.
-    pub near: f32,
-    pub reach: f32,
-    /// How far apart, in meters, two looking out from high ground stand at least.
-    pub apart: f32,
-    /// What a meter's walk to it, and a meter off the spot, take from a meter higher.
-    pub per_walk: f32,
-    pub per_off: f32,
-    /// Fighting, how much better cover is - in the meters of [`team::cover_rank`] - for each
-    /// meter it is up over the threat, up to [`Tuning::most_rise`].
-    ///
-    /// [`team::cover_rank`]: crate::tactics::team::cover_rank
-    pub cover_per_meter: f32,
-}
-
-impl Tuning {
-    pub const DEFAULT: Self = Self {
-        rise: 3.0,
-        most_rise: 12.0,
-        near: 25.0,
-        reach: 60.0,
-        apart: 6.0,
-        per_walk: 0.05,
-        per_off: 0.2,
-        cover_per_meter: 1.5,
-    };
-}
-
-impl Default for Tuning {
-    fn default() -> Self {
-        Self::DEFAULT
+tuning! {
+    /// Where high ground is worth going to.
+    {
+        /// How far up over the spot it is to look out over, in meters, for it to be high ground
+        /// at all; and how much higher counts for any more - any higher, it only looks further
+        /// down.
+        rise: f32 = 3.0,
+        most_rise: f32 = 12.0,
+        /// How far from the spot, along the ground, it may be, in meters; and how far a walk away.
+        near: f32 = 25.0,
+        reach: f32 = 60.0,
+        /// How far apart, in meters, two looking out from high ground stand at least.
+        apart: f32 = 6.0,
+        /// What a meter's walk to it, and a meter off the spot, take from a meter higher.
+        per_walk: f32 = 0.05,
+        per_off: f32 = 0.2,
+        /// Fighting, how much better cover is - in the meters of
+        /// [`crate::tactics::team::cover_rank`] - for each meter it is up over the threat, up to
+        /// [`Tuning::most_rise`].
+        cover_per_meter: f32 = 1.5,
     }
 }
 
