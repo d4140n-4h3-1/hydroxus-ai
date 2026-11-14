@@ -760,6 +760,9 @@ impl NavMesh {
         clearance: f32,
         extra: &dyn Fn(Poly) -> f32,
     ) -> Vec<Vector3<f32>> {
+        if !feet.iter().chain(to.iter()).all(|v| v.is_finite()) {
+            return Vec::new();
+        }
         let (Some(from), Some(goal)) = (self.nearest(feet), self.nearest(to)) else {
             return Vec::new();
         };
@@ -846,16 +849,33 @@ impl NavMesh {
                 .iter()
                 .filter(|&&(dx, dz)| self.poly_at(Vector3::new(wall[0] + dx, floor, wall[1] + dz)).is_some())
                 .count();
+            // And only where the ways to it and on from it are over floor: coming out of a passage
+            // narrower than twice the clearance, set out from its corner it is off to the side of
+            // the passage's mouth, and the way to it cuts through the wall.
+            let came_from = route.last().copied().unwrap_or(Vector3::new(start[0], self.floor_of(from), start[1]));
+            let going_to = Vector3::new(after[0], floor, after[1]);
             let set_out = out
                 .filter(|_| floored == 3)
                 .map(|o| Vector3::new(wall[0] + o[0] * clearance * std::f32::consts::SQRT_2, floor, wall[1] + o[1] * clearance * std::f32::consts::SQRT_2))
-                .filter(|&p| self.poly_at(p).is_some());
+                .filter(|&p| self.poly_at(p).is_some())
+                .filter(|&p| self.floor_along(came_from, p) && self.floor_along(p, going_to));
             route.push(set_out.unwrap_or(Vector3::new(at[0], floor, at[1])));
         }
         route.push(Vector3::new(to.x, self.floor_of(goal), to.z));
         route.dedup();
         route.reverse();
         route
+    }
+
+    /// Whether the straight way from `a` to `b` is over floor all along, looked at every quarter
+    /// cell. Between floors at different heights - on a stair - taken as so: what is checked is a
+    /// wall's corner cut on one floor.
+    fn floor_along(&self, a: Vector3<f32>, b: Vector3<f32>) -> bool {
+        if (a.y - b.y).abs() > self.ground.level * 0.5 {
+            return true;
+        }
+        let across = ((b.x - a.x).hypot(b.z - a.z) / (self.cell_size * 0.25)).ceil().max(1.0) as usize;
+        (0..=across).all(|k| self.poly_at(a + (b - a) * (k as f32 / across as f32)).is_some())
     }
 
     /// The cost, as [`NavMesh::route`] reckons it, of the way from `feet` to every polygon within
