@@ -181,7 +181,7 @@ You can also pass a number from `1` to `5` or a name such as `very-easy` or `exp
 
 ## NPC role-play templates
 
-`templates::role_play::RolePlay` offers Guard, Worker, Merchant, and Scout profiles.
+`templates::role_play::RolePlay` offers Guard, Worker, Merchant, Scout, and Bandit profiles.
 Each provides a conduct role, starting traits, and a daily routine. Use
 `RolePlay::ALL` for a selection menu.
 

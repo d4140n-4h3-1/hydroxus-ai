@@ -18,6 +18,7 @@ pub enum RolePlay {
     Worker,
     Merchant,
     Scout,
+    Bandit,
 }
 
 /// A routine activity for the game to carry out.
@@ -31,17 +32,25 @@ pub enum Activity {
     Trade,
     Scout,
     Socialize,
+    Raid,
 }
 
 impl RolePlay {
     /// Choices for a character or NPC setup menu.
-    pub const ALL: [Self; 4] = [Self::Guard, Self::Worker, Self::Merchant, Self::Scout];
+    pub const ALL: [Self; 5] = [
+        Self::Guard,
+        Self::Worker,
+        Self::Merchant,
+        Self::Scout,
+        Self::Bandit,
+    ];
 
     /// The conduct profile used when the NPC reacts to events.
     pub const fn role(self) -> Role {
         match self {
             Self::Guard | Self::Scout => Role::Sentry,
             Self::Worker | Self::Merchant => Role::Citizen,
+            Self::Bandit => Role::Gang,
         }
     }
 
@@ -63,6 +72,12 @@ impl RolePlay {
                 sociability: 0.85,
                 ..Traits::NEUTRAL
             },
+            Self::Bandit => Traits {
+                aggression: 0.8,
+                caution: 0.6,
+                sociability: 0.65,
+                ..Traits::NEUTRAL
+            },
             Self::Scout => Traits {
                 curiosity: 0.8,
                 observant: 0.85,
@@ -81,6 +96,7 @@ impl RolePlay {
             Self::Worker => (8.0, Activity::Work, 17.0),
             Self::Merchant => (9.0, Activity::Trade, 18.0),
             Self::Scout => (5.0, Activity::Scout, 16.0),
+            Self::Bandit => (10.0, Activity::Raid, 19.0),
         };
         Routine::new([
             Block {
@@ -112,7 +128,9 @@ mod tests {
             Activity::Work,
             Activity::Trade,
             Activity::Scout,
+            Activity::Raid,
         ];
+        assert_eq!(RolePlay::Bandit.role(), Role::Gang);
         let tuning = routine::Tuning::DEFAULT;
         for (role, duty) in RolePlay::ALL.into_iter().zip(expected) {
             let day = role.routine(&tuning, 42);
