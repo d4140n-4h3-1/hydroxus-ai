@@ -115,18 +115,24 @@ fn lane(id: usize) -> f32 {
 }
 
 fn covering_point(mesh: &NavMesh, cover: &[Point], body: Body, threat: Point) -> Option<Point> {
-    cover
+    let mut candidates: Vec<_> = cover
         .iter()
         .copied()
-        .filter_map(|at| {
+        .enumerate()
+        .filter_map(|(index, at)| {
             let distance = (at - body.at).norm();
-            if distance > 15.0 || mesh.sees_across(at, threat) {
+            if distance > 15.0 {
                 return None;
             }
-            team::cover_rank(distance, (at - threat).norm(), true).map(|rank| (at, rank))
+            team::cover_rank(distance, (at - threat).norm(), true).map(|rank| (rank, index, at))
         })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(at, _)| at)
+        .collect();
+    // Keep the original scan's tie order. Once a spot blocks sight, the rest rank lower.
+    candidates.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    candidates
+        .into_iter()
+        .map(|(_, _, at)| at)
+        .find(|&at| !mesh.sees_across(at, threat))
 }
 
 struct Shot {
