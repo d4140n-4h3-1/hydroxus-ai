@@ -7,12 +7,12 @@
 //! sight-line along the floor and `Sight::visibility`), steps the squad, and carries out each
 //! guard's intent - routing with the navmesh and walking at the pace it says.
 use hydroxus_ai::{
-    difficulty::Difficulty,
     flat, heading_of,
     navigation::{grid::WalkGrid, navmesh::NavMesh, walk::route_to},
     orchestrate::{Intent, Pace, Senses, Sentry, Squad},
     perception::sight::{Sight, Stance},
     tactics::conduct::{Reasoners, Role},
+    templates::difficulty::Difficulty,
 };
 use nalgebra::Vector3;
 

@@ -164,7 +164,7 @@ The crate does not choose what an NPC says. What came of what it did is an event
 
 ## Gameplay difficulty
 
-`difficulty::Difficulty` provides `Easy`, `Normal`, and `Hard` guard presets.
+`templates::difficulty::Difficulty` provides `Easy`, `Normal`, and `Hard` guard presets.
 Call `Difficulty::Hard.tuning()` for the crate defaults, or
 `Difficulty::Hard.apply(base)` to start from your game's own tuning.
 `Normal` uses the baseline. `Easy` gives players more time before they are

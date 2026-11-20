@@ -87,7 +87,6 @@ macro_rules! tuning {
 }
 
 pub mod alert;
-pub mod difficulty;
 pub mod life;
 pub mod navigation;
 pub mod orchestrate;
@@ -95,10 +94,12 @@ pub mod perception;
 pub mod schedule;
 pub mod social;
 pub mod tactics;
+pub mod templates;
 pub mod think;
 pub mod validate;
 
 pub use nalgebra;
+pub use templates::difficulty;
 
 use nalgebra::Vector3;
 
