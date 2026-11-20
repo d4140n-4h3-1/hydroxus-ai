@@ -181,7 +181,7 @@ You can also pass a number from `1` to `5` or a name such as `very-easy` or `exp
 
 ## NPC role-play templates
 
-`templates::role_play::RolePlay` offers Guard, Worker, Merchant, Scout, and Bandit profiles.
+`templates::role_play::RolePlay` offers Guard, Worker, Merchant, Scout, Bandit, Medic, and Courier profiles.
 Each provides a conduct role, starting traits, and a daily routine. Use
 `RolePlay::ALL` for a selection menu.
 
@@ -194,7 +194,8 @@ assert_eq!(*day.at(12.0), Activity::Trade);
 ```
 
 Use `profile.role()` and `profile.traits()` to set up NPC decisions. The game maps
-each activity to its own destinations and actions. When an interruption ends,
+each activity to its own destinations and actions. Medics schedule `Treat` duties,
+and couriers schedule `Deliver` duties. When an interruption ends,
 look up the routine again at the current game hour.
 
 ## Headless forest team battle

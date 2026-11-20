@@ -19,6 +19,8 @@ pub enum RolePlay {
     Merchant,
     Scout,
     Bandit,
+    Medic,
+    Courier,
 }
 
 /// A routine activity for the game to carry out.
@@ -33,23 +35,29 @@ pub enum Activity {
     Scout,
     Socialize,
     Raid,
+    /// Tend to patients or injured allies.
+    Treat,
+    /// Carry a message or supplies to a recipient.
+    Deliver,
 }
 
 impl RolePlay {
     /// Choices for a character or NPC setup menu.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Guard,
         Self::Worker,
         Self::Merchant,
         Self::Scout,
         Self::Bandit,
+        Self::Medic,
+        Self::Courier,
     ];
 
     /// The conduct profile used when the NPC reacts to events.
     pub const fn role(self) -> Role {
         match self {
             Self::Guard | Self::Scout => Role::Sentry,
-            Self::Worker | Self::Merchant => Role::Citizen,
+            Self::Worker | Self::Merchant | Self::Medic | Self::Courier => Role::Citizen,
             Self::Bandit => Role::Gang,
         }
     }
@@ -70,6 +78,18 @@ impl RolePlay {
             Self::Merchant => Traits {
                 aggression: 0.2,
                 sociability: 0.85,
+                ..Traits::NEUTRAL
+            },
+            Self::Medic => Traits {
+                aggression: 0.2,
+                caution: 0.7,
+                sociability: 0.75,
+                ..Traits::NEUTRAL
+            },
+            Self::Courier => Traits {
+                aggression: 0.25,
+                observant: 0.7,
+                independence: 0.75,
                 ..Traits::NEUTRAL
             },
             Self::Bandit => Traits {
@@ -97,6 +117,8 @@ impl RolePlay {
             Self::Merchant => (9.0, Activity::Trade, 18.0),
             Self::Scout => (5.0, Activity::Scout, 16.0),
             Self::Bandit => (10.0, Activity::Raid, 19.0),
+            Self::Medic => (7.0, Activity::Treat, 19.0),
+            Self::Courier => (6.0, Activity::Deliver, 17.0),
         };
         Routine::new([
             Block {
@@ -129,8 +151,12 @@ mod tests {
             Activity::Trade,
             Activity::Scout,
             Activity::Raid,
+            Activity::Treat,
+            Activity::Deliver,
         ];
         assert_eq!(RolePlay::Bandit.role(), Role::Gang);
+        assert_eq!(RolePlay::Medic.role(), Role::Citizen);
+        assert_eq!(RolePlay::Courier.role(), Role::Citizen);
         let tuning = routine::Tuning::DEFAULT;
         for (role, duty) in RolePlay::ALL.into_iter().zip(expected) {
             let day = role.routine(&tuning, 42);
