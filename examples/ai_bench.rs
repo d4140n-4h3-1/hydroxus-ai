@@ -26,7 +26,7 @@ use hydroxus_ai::{
 use hydroxus_ai::{
     flat,
     navigation::{grid::WalkGrid, navmesh::NavMesh},
-    orchestrate::{Intent, Pace, Senses, Sentry, Squad},
+    orchestrate::{Happened, Intent, Pace, Senses, Sentry, Squad},
     perception::sight::{Sight, Stance},
     tactics::conduct::{Reasoners, Role},
     Tuning,
@@ -74,6 +74,15 @@ fn memory() {
     );
 }
 
+struct SquadFrame {
+    ms: f64,
+    index: usize,
+    chasing: usize,
+    searching: usize,
+    lost_contacts: usize,
+    reassessments: usize,
+}
+
 fn orchestrated() {
     const SIDE: usize = 160;
     let mut grid = WalkGrid::new(SIDE, SIDE, 1.0);
@@ -100,10 +109,10 @@ fn orchestrated() {
             })
             .collect();
         let (mut player, mut leg) = (lap[0], 1);
-        let (mut total, mut worst, mut frames) = (0.0f64, 0.0f64, 0);
+        let mut samples = Vec::with_capacity(3600);
         let (mut spotted, mut searching) = (0, 0);
         let dt: f32 = 1.0 / 60.0;
-        for _ in 0..3600 {
+        for frame in 0..3600 {
             // The player walks the loop.
             let to = flat(lap[leg] - player);
             if to.norm() < 0.1 {
@@ -127,9 +136,7 @@ fn orchestrated() {
             let t = Instant::now();
             let thoughts = squad.step(&ai, &mesh, &mut reasoners, &mut sentries, black_box(&senses), false, |a, b| flat(bodies[a].0 - bodies[b].0).norm() < 30.0, dt);
             let took = t.elapsed().as_secs_f64() * 1e3;
-            total += took;
-            worst = worst.max(took);
-            frames += 1;
+
             for (body, thought) in bodies.iter_mut().zip(&thoughts) {
                 match thought.intent {
                     Intent::GoTo { at, pace } => {
@@ -148,17 +155,46 @@ fn orchestrated() {
                     Intent::Routine => (),
                 }
             }
-            spotted += sentries.iter().filter(|s| s.alert() == Some(hydroxus_ai::alert::Alert::Alert)).count();
-            searching += sentries.iter().filter(|s| s.alert() == Some(hydroxus_ai::alert::Alert::Evasion)).count();
+            let chasing_now = sentries.iter().filter(|s| s.alert() == Some(hydroxus_ai::alert::Alert::Alert)).count();
+            let searching_now = sentries.iter().filter(|s| s.alert() == Some(hydroxus_ai::alert::Alert::Evasion)).count();
+            spotted += chasing_now;
+            searching += searching_now;
+            let mut lost = 0;
+            let mut reassessed = 0;
+            for event in thoughts.iter().flat_map(|thought| &thought.happened) {
+                match event {
+                    Happened::LostContact => lost += 1,
+                    Happened::Reassessed => reassessed += 1,
+                    _ => (),
+                }
+            }
+            samples.push(SquadFrame {
+                ms: took,
+                index: frame,
+                chasing: chasing_now,
+                searching: searching_now,
+                lost_contacts: lost,
+                reassessments: reassessed,
+            });
         }
+        samples.sort_unstable_by(|a, b| a.ms.total_cmp(&b.ms).then(a.index.cmp(&b.index)));
+        let frames = samples.len();
+        let mean = samples.iter().map(|sample| sample.ms).sum::<f64>() / frames as f64;
+        let p99 = samples[(frames * 99).div_ceil(100) - 1].ms;
+        let worst = samples[frames - 1].ms;
         println!(
-            "orchestrated: {count} sentries, a frame {:.4} ms (worst {:.3} ms), {:.4} ms a sentry; on average {:.1} chasing and {:.1} searching",
-            total / frames as f64,
-            worst,
-            total / frames as f64 / count as f64,
+            "orchestrated: {count} sentries, a frame {mean:.4} ms (p99 {p99:.3} ms, worst {worst:.3} ms), {:.4} ms a sentry; on average {:.1} chasing and {:.1} searching",
+            mean / count as f64,
             spotted as f64 / frames as f64,
             searching as f64 / frames as f64
         );
+        for frame in samples.iter().rev().take(5) {
+            println!(
+                "  frame {:4}: {:.3} ms, {} chasing, {} searching, {} lost contact, {} reassessed",
+                frame.index, frame.ms, frame.chasing, frame.searching, frame.lost_contacts,
+                frame.reassessments,
+            );
+        }
     }
 }
 

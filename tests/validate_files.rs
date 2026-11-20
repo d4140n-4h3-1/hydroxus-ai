@@ -15,8 +15,12 @@ fn leaves(value: &Value, name: String, path: Vec<String>, out: &mut Vec<(String,
         }
         Value::Array(items) => {
             for (n, item) in items.iter().enumerate() {
-                // A list of pairs is `name[n]`; a pair's own two are `name.0` and `name.1`.
-                let name = if item.is_array() { format!("{name}[{n}]") } else { format!("{name}.{n}") };
+                // JSON flattens the distinction between fixed arrays and tuple fields.
+                let name = if item.is_array() || name == "schedule.importance" {
+                    format!("{name}[{n}]")
+                } else {
+                    format!("{name}.{n}")
+                };
                 leaves(item, name, [path.clone(), vec![n.to_string()]].concat(), out);
             }
         }

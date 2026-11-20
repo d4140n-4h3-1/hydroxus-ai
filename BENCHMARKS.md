@@ -196,6 +196,17 @@ After milestone 5.2 (word passed between sentries, and the search map re-seeded 
 built from 8588249 and this milestone and run alternately: 250 sentries 0.163-0.187 ms a frame
 against 0.171-0.177 ms; 100, 0.032-0.035 ms against 0.032 ms. Within run-to-run spread.
 
+## Reproducing slow squad frames
+
+Run `cargo run --locked --release --example ai_bench` twice on the same machine. The
+orchestrated section uses seeded starting positions and a fixed 60 Hz simulation step.
+It reports the p99 time and the five slowest zero-indexed frames for each squad size.
+Compare the frame numbers and the counts of chasers, searchers, lost contacts, and
+reassessments. A frame that repeats near the top is a candidate for profiling; a
+slow frame that moves around can reflect timing noise. Frame times measure
+`Squad::step` only. The event counts describe the workload and do not time individual
+operations. Maze's live battle benchmark is a separate run driven by the game clock.
+
 ## Not yet measured
 
 Everything ROADMAP 7.2 asks for: populations of 1 to 1,000 NPCs through the full perceive-decide

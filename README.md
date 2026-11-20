@@ -165,8 +165,8 @@ The crate does not choose what an NPC says. What came of what it did is an event
 ## Rust version and checks
 
 Rust 1.89 or newer (nalgebra 0.35's own minimum; `rust-version` in `Cargo.toml`). CI
-(`.github/workflows/ci.yml`, once pushed) builds and tests on stable and 1.89, with and without the `serde`
-feature, and fails on any clippy or rustdoc warning. Locally:
+(`.github/workflows/ci.yml`) builds and tests on stable and 1.89, with default features and
+with `serde` enabled. Locally:
 
 ```sh
 cargo test --all-features
