@@ -1021,7 +1021,7 @@ impl Squad {
         clear: impl Fn(usize, usize) -> bool,
         dt: f32,
     ) -> Vec<Thought> {
-        self.step_with_voice(tuning, mesh, reasoners, sentries, senses, seeing, clear, dt, true)
+        self.step_with_earshot(tuning, mesh, reasoners, sentries, senses, seeing, &clear, &clear, dt)
     }
 
     /// Step the squad with sighting reports sent by radio only. Equip the sentries that can
@@ -1041,11 +1041,17 @@ impl Squad {
         clear: impl Fn(usize, usize) -> bool,
         dt: f32,
     ) -> Vec<Thought> {
-        self.step_with_voice(tuning, mesh, reasoners, sentries, senses, seeing, clear, dt, false)
+        self.step_with_earshot(tuning, mesh, reasoners, sentries, senses, seeing, clear, |_, _| false, dt)
     }
 
+    /// Step the squad with separate visibility and earshot checks.
+    ///
+    /// `clear(observer, other)` controls visual coordination. `carries(speaker, listener)`
+    /// says whether a nearby report can be heard through the game world. The squad also checks
+    /// the speaker's voice range. Radio reports use their own reach and equipment rules.
+    /// Both kinds of report are simulated independently of game audio playback.
     #[allow(clippy::too_many_arguments)]
-    fn step_with_voice(
+    pub fn step_with_earshot(
         &mut self,
         tuning: &crate::Tuning,
         mesh: &NavMesh,
@@ -1054,8 +1060,8 @@ impl Squad {
         senses: &[Senses],
         seeing: impl Into<Seeing>,
         clear: impl Fn(usize, usize) -> bool,
+        carries: impl Fn(usize, usize) -> bool,
         dt: f32,
-        voice: bool,
     ) -> Vec<Thought> {
         let seeing = seeing.into();
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
@@ -1127,7 +1133,7 @@ impl Squad {
         }
         // Word of a sighting: each that saw the player for itself this frame - spotting them, or
         // finding them again - passes it on to each it reaches: by radio, both having one, or
-        // by voice, near enough and nothing in the way (`clear`). Each takes it as its own
+        // by voice, near enough and where it carries. Each takes it as its own
         // trust of the one telling, and how fresh and sure it is, has it.
         for i in 0..n {
             let saw = sentries[i].happened.iter().any(|h| matches!(h, Happened::Spotted | Happened::FoundAgain));
@@ -1141,7 +1147,7 @@ impl Squad {
             for j in (0..n).filter(|&j| j != i) {
                 let (to, theirs) = (sentries[j].feet, sentries[j].radio);
                 let reached = word::reaches(&words, Channel::Radio, from, to, (radio, theirs), || false)
-                    || (voice && word::reaches(&words, Channel::Voice, from, to, (radio, theirs), || clear(i, j)));
+                    || word::reaches(&words, Channel::Voice, from, to, (radio, theirs), || carries(i, j));
                 if reached {
                     sentries[j].hear_word(tuning, word, self.now);
                 }

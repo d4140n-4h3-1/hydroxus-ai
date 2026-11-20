@@ -927,6 +927,34 @@ fn silent_squads_share_radio_sightings_without_shouting() {
 }
 
 #[test]
+fn sighting_reports_can_carry_to_nearby_sentries_without_visual_contact() {
+    let mesh = level();
+    let mut squad = Squad::new(&AI);
+    let mut reasoners = Reasoners::default();
+    let mut sentries: [Sentry; 4] = std::array::from_fn(|_| Sentry::new(Role::Sentry));
+    let player = at(20.0, 2.0);
+    let senses = [
+        Senses { feet: at(8.0, 2.0), heading: EAST, visible: 1.0, player, threat: 0.0 },
+        Senses { feet: at(2.0, 2.0), heading: WEST, visible: 0.0, player, threat: 0.0 },
+        Senses { feet: at(3.0, 2.0), heading: WEST, visible: 0.0, player, threat: 0.0 },
+        Senses { feet: at(31.0, 15.0), heading: WEST, visible: 0.0, player, threat: 0.0 },
+    ];
+    let mut told = [false; 4];
+    for _ in 0..180 {
+        let thoughts = squad.step_with_earshot(
+            &AI, &mesh, &mut reasoners, &mut sentries, &senses, false,
+            |_, _| false, |speaker, listener| speaker == 0 && listener != 2,
+            1.0 / 60.0,
+        );
+        for (heard, thought) in told.iter_mut().zip(thoughts) {
+            *heard |= thought.happened.contains(&Happened::Told);
+        }
+    }
+    assert_eq!(told, [false, true, false, false]);
+    assert!(sentries[1].memory.recall(Kind::Event).iter().any(|event| !event.firsthand));
+}
+
+#[test]
 fn stale_word_is_doubted_and_fresh_word_acted_on() {
     use hydroxus_ai::social::word::Word;
     let mut world = World::new(&[(at(4.0, 2.0), EAST)], GONE);
