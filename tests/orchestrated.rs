@@ -498,8 +498,8 @@ fn nonsense_from_the_game_is_let_go() {
 
 #[test]
 fn the_modules_do_not_depend_on_the_orchestration_layer() {
-    // Optional: nothing but the crate root (to declare it and gather its tuning) and validation
-    // names it.
+    // The crate root, gameplay presets, and validation compose its tuning.
+    // The behavior modules keep working independently of the orchestration layer.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut stack = vec![root];
     let mut users = Vec::new();
@@ -514,7 +514,7 @@ fn the_modules_do_not_depend_on_the_orchestration_layer() {
         }
     }
     users.sort();
-    assert_eq!(users, vec!["lib.rs", "orchestrate.rs", "validate.rs"]);
+    assert_eq!(users, vec!["difficulty.rs", "lib.rs", "orchestrate.rs", "validate.rs"]);
 }
 
 

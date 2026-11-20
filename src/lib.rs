@@ -87,6 +87,7 @@ macro_rules! tuning {
 }
 
 pub mod alert;
+pub mod difficulty;
 pub mod life;
 pub mod navigation;
 pub mod orchestrate;

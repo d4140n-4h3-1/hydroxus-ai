@@ -162,6 +162,21 @@ The crate does not choose what an NPC says. What came of what it did is an event
 `social::report::Telling`, a ride's `navigation::ride::Rides`, a threat's `tactics::threat::Threat`
 - and the game maps it to its own lines, sounds or UI.
 
+## Gameplay difficulty
+
+`difficulty::Difficulty` provides `Easy`, `Normal`, and `Hard` guard presets.
+Call `Difficulty::Hard.tuning()` for the crate defaults, or
+`Difficulty::Hard.apply(base)` to start from your game's own tuning.
+`Normal` uses the baseline. `Easy` gives players more time before they are
+spotted and shortens searches. `Hard` speeds up detection, checks the search
+map more often, and gives past sightings and leads more influence.
+
+Try the same guard scenario at any difficulty:
+
+```sh
+cargo run --locked --example guard -- hard
+```
+
 ## Headless forest team battle
 
 ```sh

@@ -7,12 +7,12 @@
 //! sight-line along the floor and `Sight::visibility`), steps the squad, and carries out each
 //! guard's intent - routing with the navmesh and walking at the pace it says.
 use hydroxus_ai::{
+    difficulty::Difficulty,
     flat, heading_of,
     navigation::{grid::WalkGrid, navmesh::NavMesh, walk::route_to},
     orchestrate::{Intent, Pace, Senses, Sentry, Squad},
     perception::sight::{Sight, Stance},
     tactics::conduct::{Reasoners, Role},
-    Tuning,
 };
 use nalgebra::Vector3;
 
@@ -21,7 +21,16 @@ fn at(x: f32, z: f32) -> Vector3<f32> {
 }
 
 fn main() {
-    let ai = Tuning::DEFAULT;
+    let difficulty = match std::env::args().nth(1).as_deref() {
+        None | Some("normal") => Difficulty::Normal,
+        Some("easy") => Difficulty::Easy,
+        Some("hard") => Difficulty::Hard,
+        Some(other) => {
+            eprintln!("Unknown difficulty {other:?}. Use easy, normal or hard.");
+            std::process::exit(2);
+        }
+    };
+    let ai = difficulty.tuning();
     if let Err(invalid) = ai.validate() {
         panic!("{invalid}");
     }
