@@ -164,18 +164,20 @@ The crate does not choose what an NPC says. What came of what it did is an event
 
 ## Gameplay difficulty
 
-`templates::difficulty::Difficulty` provides `Easy`, `Normal`, and `Hard` guard presets.
-Call `Difficulty::Hard.tuning()` for the crate defaults, or
-`Difficulty::Hard.apply(base)` to start from your game's own tuning.
-`Normal` uses the baseline. `Easy` gives players more time before they are
-spotted and shortens searches. `Hard` speeds up detection, checks the search
-map more often, and gives past sightings and leads more influence.
+`templates::difficulty::Difficulty` provides five choices in order from easiest
+to hardest: Very Easy, Easy, Normal, Hard, and Expert. Games can use
+`Difficulty::ALL` and `label()` to build a menu. Call `Difficulty::Expert.tuning()`
+for the crate defaults, or `Difficulty::Expert.apply(base)` with your game's
+baseline. Normal is the default. Higher levels speed up detection, extend searches,
+and put more weight on old leads.
 
-Try the same guard scenario at any difficulty:
+Open the numbered menu in the guard example:
 
 ```sh
-cargo run --locked --example guard -- hard
+cargo run --locked --example guard -- --choose
 ```
+
+You can also pass a number from `1` to `5` or a name such as `very-easy` or `expert`.
 
 ## Headless forest team battle
 

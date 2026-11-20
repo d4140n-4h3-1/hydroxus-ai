@@ -20,15 +20,31 @@ fn at(x: f32, z: f32) -> Vector3<f32> {
     Vector3::new(x, 0.0, z)
 }
 
-fn main() {
-    let difficulty = match std::env::args().nth(1).as_deref() {
-        None | Some("normal") => Difficulty::Normal,
-        Some("easy") => Difficulty::Easy,
-        Some("hard") => Difficulty::Hard,
-        Some(other) => {
-            eprintln!("Unknown difficulty {other:?}. Use easy, normal or hard.");
-            std::process::exit(2);
+fn choose_difficulty() -> Option<Difficulty> {
+    let mut choice = std::env::args().nth(1);
+    if choice.as_deref() == Some("--choose") {
+        println!("Choose a difficulty");
+        for (index, level) in Difficulty::ALL.into_iter().enumerate() {
+            println!("  {}. {}", index + 1, level.label());
         }
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok()?;
+        choice = Some(input);
+    }
+    let Some(choice) = choice else {
+        return Some(Difficulty::default());
+    };
+    if let Ok(number) = choice.trim().parse::<usize>() {
+        return Difficulty::ALL.get(number.checked_sub(1)?).copied();
+    }
+    let label = choice.trim().replace(['-', '_'], " ");
+    Difficulty::ALL.into_iter().find(|level| level.label().eq_ignore_ascii_case(&label))
+}
+
+fn main() {
+    let Some(difficulty) = choose_difficulty() else {
+        eprintln!("Choose 1–5, Very Easy, Easy, Normal, Hard, or Expert.");
+        std::process::exit(2);
     };
     let ai = difficulty.tuning();
     if let Err(invalid) = ai.validate() {
