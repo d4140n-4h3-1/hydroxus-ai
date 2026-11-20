@@ -1021,6 +1021,42 @@ impl Squad {
         clear: impl Fn(usize, usize) -> bool,
         dt: f32,
     ) -> Vec<Thought> {
+        self.step_with_voice(tuning, mesh, reasoners, sentries, senses, seeing, clear, dt, true)
+    }
+
+    /// Step the squad with sighting reports sent by radio only. Equip the sentries that can
+    /// exchange reports with [`Sentry::with_radio`]. Reports still respect radio range and
+    /// the recipient's trust. The `clear` callback is used for visual coordination.
+    ///
+    /// The resulting [`Thought`] events are available to gameplay and debugging.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_silent(
+        &mut self,
+        tuning: &crate::Tuning,
+        mesh: &NavMesh,
+        reasoners: &mut Reasoners,
+        sentries: &mut [Sentry],
+        senses: &[Senses],
+        seeing: impl Into<Seeing>,
+        clear: impl Fn(usize, usize) -> bool,
+        dt: f32,
+    ) -> Vec<Thought> {
+        self.step_with_voice(tuning, mesh, reasoners, sentries, senses, seeing, clear, dt, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn step_with_voice(
+        &mut self,
+        tuning: &crate::Tuning,
+        mesh: &NavMesh,
+        reasoners: &mut Reasoners,
+        sentries: &mut [Sentry],
+        senses: &[Senses],
+        seeing: impl Into<Seeing>,
+        clear: impl Fn(usize, usize) -> bool,
+        dt: f32,
+        voice: bool,
+    ) -> Vec<Thought> {
         let seeing = seeing.into();
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
         let n = sentries.len().min(senses.len());
@@ -1105,7 +1141,7 @@ impl Squad {
             for j in (0..n).filter(|&j| j != i) {
                 let (to, theirs) = (sentries[j].feet, sentries[j].radio);
                 let reached = word::reaches(&words, Channel::Radio, from, to, (radio, theirs), || false)
-                    || word::reaches(&words, Channel::Voice, from, to, (radio, theirs), || clear(i, j));
+                    || (voice && word::reaches(&words, Channel::Voice, from, to, (radio, theirs), || clear(i, j)));
                 if reached {
                     sentries[j].hear_word(tuning, word, self.now);
                 }
