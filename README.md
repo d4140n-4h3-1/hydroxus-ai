@@ -179,6 +179,24 @@ cargo run --locked --example guard -- --choose
 
 You can also pass a number from `1` to `5` or a name such as `very-easy` or `expert`.
 
+## NPC role-play templates
+
+`templates::role_play::RolePlay` offers Guard, Worker, Merchant, and Scout profiles.
+Each provides a conduct role, starting traits, and a daily routine. Use
+`RolePlay::ALL` for a selection menu.
+
+```rust
+use hydroxus_ai::{templates::role_play::{Activity, RolePlay}, Tuning};
+
+let profile = RolePlay::Merchant;
+let day = profile.routine(&Tuning::DEFAULT.routine, 42);
+assert_eq!(*day.at(12.0), Activity::Trade);
+```
+
+Use `profile.role()` and `profile.traits()` to set up NPC decisions. The game maps
+each activity to its own destinations and actions. When an interruption ends,
+look up the routine again at the current game hour.
+
 ## Headless forest team battle
 
 ```sh
