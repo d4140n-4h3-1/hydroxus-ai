@@ -7,6 +7,7 @@ use hydroxus_ai::{
     heading_of,
     navigation::{
         grid::{Rng, WalkGrid},
+        ground::{self, Step},
         navmesh::NavMesh,
         walk::route_to,
     },
@@ -150,15 +151,23 @@ fn tick(
     rng: &mut Rng,
     score: &mut [u32; 2],
 ) -> u32 {
-    for (id, droid) in droids.iter_mut().enumerate() {
-        if droid.body.health == 0 && frame >= droid.respawn {
-            *droid = Droid::spawn(id);
+    for id in 0..COUNT {
+        if droids[id].body.health == 0 && frame >= droids[id].respawn {
+            let fresh = Droid::spawn(id);
+            if droids
+                .iter()
+                .filter(|other| other.body.health > 0)
+                .all(|other| (other.body.at - fresh.body.at).norm() >= ground::CLEARANCE)
+            {
+                droids[id] = fresh;
+            }
         }
     }
     for knowledge in intel.iter_mut() {
         knowledge.age(DT);
     }
     let bodies: [Body; COUNT] = std::array::from_fn(|id| droids[id].body);
+    let mut positions = bodies.map(|body| body.at);
     let mut shots = Vec::new();
     for (id, droid) in droids.iter_mut().enumerate() {
         let body = bodies[id];
@@ -250,19 +259,32 @@ fn tick(
             };
             droid.route = route_to(mesh, body.at, goal, f32::INFINITY);
         }
-        if let Some(&waypoint) = droid.route.last() {
-            let delta = waypoint - body.at;
-            let distance = delta.norm();
-            let step = 3.5 * DT;
-            if distance <= step {
-                droid.body.at = waypoint;
-                droid.route.pop();
-            } else {
-                droid.body.at += delta * (step / distance);
+        let mut neighbors = [Point::zeros(); COUNT - 1];
+        let mut count = 0;
+        for (other, &at) in positions.iter().enumerate() {
+            if other != id && bodies[other].health > 0 {
+                neighbors[count] = at;
+                count += 1;
             }
-            if let Some(heading) = heading_of(delta) {
-                droid.body.heading = heading;
+        }
+        match ground::step(
+            mesh,
+            &AI,
+            body.at,
+            &mut droid.route,
+            3.5 * DT,
+            &neighbors[..count],
+            id as u32,
+        ) {
+            Step::Move(at) => {
+                droid.body.at = at;
+                positions[id] = at;
+                if let Some(heading) = heading_of(at - body.at) {
+                    droid.body.heading = heading;
+                }
             }
+            Step::Replan => droid.route.clear(),
+            Step::Waiting | Step::Arrived => {}
         }
     }
 
@@ -360,4 +382,50 @@ fn main() -> Result<(), Box<dyn Error>> {
         ticks as f32 * DT
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walkers_stay_on_the_floor_and_keep_clear_of_one_another() {
+        let (mesh, cover) = arena();
+        let mut droids = std::array::from_fn(Droid::spawn);
+        let mut intel = [Intel::new(COUNT), Intel::new(COUNT)];
+        let mut rng = Rng::new(1);
+        let mut score = [0, 0];
+        for frame in 0..240 * HZ {
+            tick(
+                frame,
+                &mesh,
+                &cover,
+                &mut droids,
+                &mut intel,
+                &mut rng,
+                &mut score,
+            );
+            for (id, droid) in droids
+                .iter()
+                .enumerate()
+                .filter(|(_, droid)| droid.body.health > 0)
+            {
+                assert!(
+                    mesh.poly_at(droid.body.at).is_some(),
+                    "droid {id} off floor at tick {frame}"
+                );
+                for other in droids
+                    .iter()
+                    .skip(id + 1)
+                    .filter(|other| other.body.health > 0)
+                {
+                    assert!(
+                        (droid.body.at - other.body.at).norm() >= ground::CLEARANCE - 1.0e-5,
+                        "droid {id} too close to another at tick {frame}"
+                    );
+                }
+            }
+        }
+        assert!(score.iter().all(|&kills| kills > 0), "{score:?}");
+    }
 }

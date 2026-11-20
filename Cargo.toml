@@ -23,3 +23,7 @@ serde_json = "1"
 
 [features]
 serde = ["dep:serde", "nalgebra/serde-serialize"]
+
+[[example]]
+name = "team_battle_forest"
+test = true

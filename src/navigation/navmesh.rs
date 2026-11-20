@@ -867,6 +867,21 @@ impl NavMesh {
         route
     }
 
+    /// Samples a short walking step on one floor, including both endpoints.
+    pub(crate) fn on_floor_segment(&self, from: Vector3<f32>, to: Vector3<f32>, height: f32) -> bool {
+        let on_floor = |mut at: Vector3<f32>| {
+            at.y = height;
+            self.poly_at(at).is_some_and(|poly| {
+                !self.is_blocked(poly) && (self.floor_of(poly) - height).abs() <= 1.0e-3
+            })
+        };
+        if !on_floor(to) {
+            return false;
+        }
+        let steps = ((to.x - from.x).hypot(to.z - from.z) / (self.cell_size * 0.25)).ceil().max(1.0) as usize;
+        (0..steps).all(|i| on_floor(from.lerp(&to, i as f32 / steps as f32)))
+    }
+
     /// Whether the straight way from `a` to `b` is over floor all along, looked at every quarter
     /// cell. Between floors at different heights - on a stair - taken as so: what is checked is a
     /// wall's corner cut on one floor.
