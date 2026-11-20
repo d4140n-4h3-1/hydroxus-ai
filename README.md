@@ -162,6 +162,19 @@ The crate does not choose what an NPC says. What came of what it did is an event
 `social::report::Telling`, a ride's `navigation::ride::Rides`, a threat's `tactics::threat::Threat`
 - and the game maps it to its own lines, sounds or UI.
 
+## Headless forest team battle
+
+```sh
+BATTLE_SEED=1 cargo run --locked --release --example team_battle_forest
+```
+
+Five red and five cyan droids fight on a flat, schematic forest arena using the crate's
+navmesh, fog-limited sight, hearing, and team tactics. Combat uses simulated hits and
+five-second respawns. The example runs in the terminal with no game assets or graphics
+dependencies. It prints score changes and stops at 30 eliminations or after 240 seconds
+of simulation. Set `BATTLE_BENCH` to change the time limit in simulated seconds.
+The simulation advances at 20 Hz, so rerunning with the same seed replays the match.
+
 ## Rust version and checks
 
 Rust 1.89 or newer (nalgebra 0.35's own minimum; `rust-version` in `Cargo.toml`). CI
