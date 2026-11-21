@@ -18,6 +18,7 @@ It is in five folders, and its alert phases besides.
 | `sight` | What an NPC can see: clearly in a cone in front of it, and near out of the corner of its eye, but nothing behind it, whatever it is doing - so it can be crept up on from behind, or slipped round - less far the lower the player is unless it is hunting them, and less far in the dark; and how visible someone is to it, from 0 to 1. |
 | `detection` | Becoming aware of someone gradually, as Fallout's sneaking has it: awareness filling while they are in view, the quicker the more visible they are and the keener it is looking, draining a while after, and growing with every noise it hears, the more the nearer - `[HIDDEN]`, `[CAUTION]`, `[DANGER]` - with events as it notices, spots and loses them, and the most aware of many for a meter. |
 | `hearing` | How far a noise carries: along the floor of the navmesh, round the corners, not through the walls; and how near it was to whoever hears it. |
+| `smell` | Track a source by the freshest detectable points on its fading scent trail. The game controls whether scent carries between two points. |
 | `bolts` | A bolt flying by: noticed going past in front of it, or felt close by wherever it goes. |
 | `witness` | Whether one that saw a shooting knows who did it: only if it saw them near enough. |
 
@@ -178,6 +179,21 @@ cargo run --locked --example guard -- --choose
 ```
 
 You can also pass a number from `1` to `5` or a name such as `very-easy` or `expert`.
+
+## Headless scent pursuit
+
+```sh
+cargo run --locked --example scent_pursuit
+```
+
+A convict leaves scent along a corridor and hides around a bend. A dog follows the
+trail and barks, drawing three guards around the corner. The example runs in the
+terminal and prints the pursuit events.
+
+Use one `perception::smell::Trail` per tracked source. Lay samples as it moves and
+query them with a `Nose`. To follow a trail forward, pass the timestamp of the last
+sample reached to `Trail::sniff`. The host game supplies the scent obstruction
+check, moves the dog, and decides how to react when the trail goes cold.
 
 ## NPC role-play templates
 
